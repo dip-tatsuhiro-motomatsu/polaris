@@ -1,0 +1,681 @@
+openapi: 3.0.3
+info:
+  title: チーム健全性ダッシュボード API
+  description: |
+    GitHubリポジトリのIssue/PRを分析し、チームの健全性を評価するAPI。
+
+    ## 同期方式
+    - 初回: 全件取得
+    - 2回目以降: lastSyncedAt以降の更新分のみ取得（差分同期）
+
+    ## 表示フィルタ
+    - スプリント期間を指定して、該当期間のデータのみ表示可能
+  version: 1.0.0
+
+servers:
+  - url: /api
+    description: Next.js API Routes
+
+paths:
+  /repositories:
+    get:
+      summary: リポジトリ一覧を取得
+      operationId: getRepositories
+      tags:
+        - Repositories
+      responses:
+        '200':
+          description: リポジトリ一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  repositories:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Repository'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      summary: リポジトリを登録
+      operationId: createRepository
+      tags:
+        - Repositories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - url
+              properties:
+                url:
+                  type: string
+                  format: uri
+                  example: https://github.com/owner/repo
+      responses:
+        '201':
+          description: リポジトリが登録された
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repository'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: リポジトリが既に登録されている
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /repositories/{repositoryId}:
+    get:
+      summary: リポジトリ詳細を取得
+      operationId: getRepository
+      tags:
+        - Repositories
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      responses:
+        '200':
+          description: リポジトリ詳細
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repository'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: リポジトリを削除
+      operationId: deleteRepository
+      tags:
+        - Repositories
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+      responses:
+        '204':
+          description: 削除成功
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /github/sync:
+    post:
+      summary: GitHubからデータを同期（差分同期）
+      description: |
+        初回は全件取得、2回目以降はlastSyncedAt以降の更新分のみ取得。
+        fullSync=trueで強制的に全件再取得。
+      operationId: syncGitHub
+      tags:
+        - GitHub
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repositoryId
+              properties:
+                repositoryId:
+                  type: string
+                fullSync:
+                  type: boolean
+                  default: false
+                  description: trueの場合、lastSyncedAtを無視して全件再取得
+      responses:
+        '200':
+          description: 同期完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issuesSynced:
+                    type: integer
+                    description: 同期されたIssue数
+                  prsSynced:
+                    type: integer
+                    description: 同期されたPR数
+                  isFullSync:
+                    type: boolean
+                    description: 全件同期かどうか
+                  lastSyncedAt:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          description: GitHub APIレート制限
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  retryAfter:
+                    type: string
+                    format: date-time
+                    description: 次回リクエスト可能時刻
+
+  /repositories/{repositoryId}/issues:
+    get:
+      summary: Issue一覧を取得（評価付き、スプリントフィルタ対応）
+      operationId: getIssues
+      tags:
+        - Issues
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [open, closed, all]
+            default: all
+        - name: sprintStart
+          in: query
+          schema:
+            type: string
+            format: date
+          description: スプリント開始日（この日以降に作成されたIssue）
+        - name: sprintEnd
+          in: query
+          schema:
+            type: string
+            format: date
+          description: スプリント終了日（この日以前に作成されたIssue）
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: Issue一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  issues:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Issue'
+                  total:
+                    type: integer
+                  hasMore:
+                    type: boolean
+                  filter:
+                    type: object
+                    properties:
+                      sprintStart:
+                        type: string
+                        format: date
+                        nullable: true
+                      sprintEnd:
+                        type: string
+                        format: date
+                        nullable: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /repositories/{repositoryId}/pull-requests:
+    get:
+      summary: PR一覧を取得（評価付き、スプリントフィルタ対応）
+      operationId: getPullRequests
+      tags:
+        - PullRequests
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum: [open, closed, merged, all]
+            default: all
+        - name: sprintStart
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: sprintEnd
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: PR一覧
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pullRequests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PullRequest'
+                  total:
+                    type: integer
+                  hasMore:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /evaluations/speed:
+    post:
+      summary: Issue完了速度を評価
+      operationId: evaluateSpeed
+      tags:
+        - Evaluations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repositoryId
+              properties:
+                repositoryId:
+                  type: string
+                issueIds:
+                  type: array
+                  items:
+                    type: string
+                  description: 指定しない場合は全クローズ済みIssueを評価
+      responses:
+        '200':
+          description: 評価完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evaluated:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EvaluationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /evaluations/quality:
+    post:
+      summary: Issue記述品質をAI評価
+      operationId: evaluateQuality
+      tags:
+        - Evaluations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repositoryId
+              properties:
+                repositoryId:
+                  type: string
+                issueIds:
+                  type: array
+                  items:
+                    type: string
+                  description: 指定しない場合は全Issueを評価
+      responses:
+        '200':
+          description: 評価完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evaluated:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EvaluationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /evaluations/consistency:
+    post:
+      summary: Issue-PR整合性をAI評価
+      operationId: evaluateConsistency
+      tags:
+        - Evaluations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - repositoryId
+              properties:
+                repositoryId:
+                  type: string
+                prIds:
+                  type: array
+                  items:
+                    type: string
+                  description: 指定しない場合はリンク済みの全PRを評価
+      responses:
+        '200':
+          description: 評価完了
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evaluated:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EvaluationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /summary/{repositoryId}:
+    get:
+      summary: チームサマリーを取得（スプリントフィルタ対応）
+      operationId: getSummary
+      tags:
+        - Summary
+      parameters:
+        - $ref: '#/components/parameters/RepositoryId'
+        - name: sprintStart
+          in: query
+          schema:
+            type: string
+            format: date
+          description: スプリント開始日（指定しない場合は全期間）
+        - name: sprintEnd
+          in: query
+          schema:
+            type: string
+            format: date
+          description: スプリント終了日
+      responses:
+        '200':
+          description: サマリーデータ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TeamSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  parameters:
+    RepositoryId:
+      name: repositoryId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  schemas:
+    Repository:
+      type: object
+      properties:
+        id:
+          type: string
+        owner:
+          type: string
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        githubId:
+          type: integer
+        lastSyncedAt:
+          type: string
+          format: date-time
+          nullable: true
+        issueCount:
+          type: integer
+        prCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    Issue:
+      type: object
+      properties:
+        id:
+          type: string
+        number:
+          type: integer
+        title:
+          type: string
+        body:
+          type: string
+        state:
+          type: string
+          enum: [open, closed]
+        createdAt:
+          type: string
+          format: date-time
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+        assignee:
+          type: string
+          nullable: true
+        labels:
+          type: array
+          items:
+            type: string
+        speedEvaluation:
+          $ref: '#/components/schemas/EvaluationResult'
+        qualityEvaluation:
+          $ref: '#/components/schemas/EvaluationResult'
+
+    PullRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        number:
+          type: integer
+        title:
+          type: string
+        body:
+          type: string
+        state:
+          type: string
+          enum: [open, closed, merged]
+        linkedIssueNumbers:
+          type: array
+          items:
+            type: integer
+        consistencyEvaluation:
+          $ref: '#/components/schemas/EvaluationResult'
+
+    EvaluationResult:
+      type: object
+      nullable: true
+      properties:
+        score:
+          type: integer
+          minimum: 0
+          maximum: 120
+        grade:
+          type: string
+          enum: [S, A, B, C]
+        message:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+        evaluatedAt:
+          type: string
+          format: date-time
+
+    TeamSummary:
+      type: object
+      properties:
+        repositoryId:
+          type: string
+        period:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date
+              nullable: true
+            end:
+              type: string
+              format: date
+              nullable: true
+            isFullPeriod:
+              type: boolean
+              description: 全期間かどうか
+        totalIssues:
+          type: integer
+        closedIssues:
+          type: integer
+        totalPRs:
+          type: integer
+        averageScores:
+          type: object
+          properties:
+            speed:
+              type: number
+            quality:
+              type: number
+            consistency:
+              type: number
+        gradeDistribution:
+          type: object
+          properties:
+            speed:
+              $ref: '#/components/schemas/GradeDistribution'
+            quality:
+              $ref: '#/components/schemas/GradeDistribution'
+            consistency:
+              $ref: '#/components/schemas/GradeDistribution'
+        memberStats:
+          type: array
+          items:
+            type: object
+            properties:
+              assignee:
+                type: string
+              issueCount:
+                type: integer
+              averageSpeed:
+                type: number
+              averageQuality:
+                type: number
+
+    GradeDistribution:
+      type: object
+      properties:
+        S:
+          type: integer
+        A:
+          type: integer
+        B:
+          type: integer
+        C:
+          type: integer
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+  responses:
+    BadRequest:
+      description: リクエストが不正
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: 認証が必要
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: リソースが見つからない
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: Firebase ID Token
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Repositories
+    description: リポジトリ管理
+  - name: GitHub
+    description: GitHub同期（差分同期対応）
+  - name: Issues
+    description: Issue取得（スプリントフィルタ対応）
+  - name: PullRequests
+    description: PR取得（スプリントフィルタ対応）
+  - name: Evaluations
+    description: 評価実行
+  - name: Summary
+    description: チームサマリー（スプリントフィルタ対応）
