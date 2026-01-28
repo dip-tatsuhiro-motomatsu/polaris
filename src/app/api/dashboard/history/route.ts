@@ -59,6 +59,10 @@ interface SprintStats {
     evaluatedIssues: number;
     averageQualityScore: number | null;
     qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
+    // PR整合性評価
+    consistencyEvaluatedIssues: number;
+    averageConsistencyScore: number | null;
+    consistencyGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
   };
   users: {
     username: string;
@@ -70,6 +74,9 @@ interface SprintStats {
     // 品質評価
     averageQualityScore: number | null;
     qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
+    // PR整合性評価
+    averageConsistencyScore: number | null;
+    consistencyGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
   }[];
 }
 
@@ -172,6 +179,7 @@ export async function GET(request: NextRequest) {
       // チーム全体の統計
       const closedIssues = sprintIssues.filter((i) => i.state === "closed" && i.score !== null);
       const evaluatedIssues = sprintIssues.filter((i) => i.qualityEvaluation !== null);
+      const consistencyEvaluatedIssues = sprintIssues.filter((i) => i.consistencyEvaluation !== null);
       const teamStats = {
         totalIssues: sprintIssues.length,
         closedIssues: closedIssues.length,
@@ -199,6 +207,18 @@ export async function GET(request: NextRequest) {
           D: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "D").length,
           E: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "E").length,
         },
+        // PR整合性評価
+        consistencyEvaluatedIssues: consistencyEvaluatedIssues.length,
+        averageConsistencyScore: consistencyEvaluatedIssues.length > 0
+          ? Math.round((consistencyEvaluatedIssues.reduce((sum, i) => sum + (i.consistencyEvaluation?.totalScore || 0), 0) / consistencyEvaluatedIssues.length) * 10) / 10
+          : null,
+        consistencyGradeDistribution: {
+          A: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "A").length,
+          B: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "B").length,
+          C: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "C").length,
+          D: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "D").length,
+          E: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "E").length,
+        },
       };
 
       // ユーザー別の統計
@@ -211,6 +231,8 @@ export async function GET(request: NextRequest) {
         gradeDistribution: { S: number; A: number; B: number; C: number };
         qualityScores: number[];
         qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
+        consistencyScores: number[];
+        consistencyGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
       }>();
 
       // trackedUsersの順序で初期化
@@ -224,6 +246,8 @@ export async function GET(request: NextRequest) {
           gradeDistribution: { S: 0, A: 0, B: 0, C: 0 },
           qualityScores: [],
           qualityGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+          consistencyScores: [],
+          consistencyGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
         });
       }
 
@@ -250,6 +274,12 @@ export async function GET(request: NextRequest) {
           stats.qualityScores.push(issue.qualityEvaluation.totalScore);
           stats.qualityGradeDistribution[issue.qualityEvaluation.grade]++;
         }
+
+        // PR整合性評価の集計
+        if (issue.consistencyEvaluation) {
+          stats.consistencyScores.push(issue.consistencyEvaluation.totalScore);
+          stats.consistencyGradeDistribution[issue.consistencyEvaluation.grade]++;
+        }
       }
 
       const userStats = Array.from(userStatsMap.values()).map((stats) => ({
@@ -267,6 +297,10 @@ export async function GET(request: NextRequest) {
           ? Math.round((stats.qualityScores.reduce((a, b) => a + b, 0) / stats.qualityScores.length) * 10) / 10
           : null,
         qualityGradeDistribution: stats.qualityGradeDistribution,
+        averageConsistencyScore: stats.consistencyScores.length > 0
+          ? Math.round((stats.consistencyScores.reduce((a, b) => a + b, 0) / stats.consistencyScores.length) * 10) / 10
+          : null,
+        consistencyGradeDistribution: stats.consistencyGradeDistribution,
       }));
 
       sprintStats.push({

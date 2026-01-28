@@ -98,3 +98,60 @@ export interface MemberStats {
   averageSpeed: number | null;
   averageQuality: number | null;
 }
+
+// PR整合性評価用グレード（品質評価と同じA-E）
+export type ConsistencyGrade = "A" | "B" | "C" | "D" | "E";
+
+/**
+ * リンクされたPR情報
+ */
+export interface LinkedPR {
+  number: number;
+  title: string;
+  url: string;
+  body: string | null;
+  diff: string | null; // 変更内容の概要
+  changedFiles: string[]; // 変更されたファイル一覧
+  additions: number;
+  deletions: number;
+  mergedAt: string | null;
+}
+
+/**
+ * PR整合性評価のカテゴリ別スコア
+ */
+export interface ConsistencyCategoryScore {
+  categoryId: string;
+  categoryName: string;
+  score: number;
+  maxScore: number;
+  feedback: string;
+}
+
+/**
+ * Issue-PR整合性の評価結果
+ */
+export interface PRConsistencyEvaluation {
+  totalScore: number;
+  grade: ConsistencyGrade;
+  linkedPRs: {
+    number: number;
+    title: string;
+    url: string;
+  }[];
+  categories: ConsistencyCategoryScore[];
+  overallFeedback: string;
+  // Issue記述への改善提案（不十分な場合のみ）
+  issueImprovementSuggestions: string[];
+  evaluatedAt: string;
+}
+
+/**
+ * PR整合性評価の基準項目
+ */
+export interface ConsistencyCheckItem {
+  id: string;
+  label: string;
+  weight: number;
+  description: string;
+}

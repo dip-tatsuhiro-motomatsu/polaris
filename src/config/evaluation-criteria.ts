@@ -1,4 +1,4 @@
-import { SpeedCriterion, QualityCheckItem, Grade, QualityGrade } from "@/types/evaluation";
+import { SpeedCriterion, QualityCheckItem, Grade, QualityGrade, ConsistencyGrade, ConsistencyCheckItem } from "@/types/evaluation";
 
 /**
  * 完了速度評価基準
@@ -163,9 +163,119 @@ export function getQualityGradeInfo(grade: QualityGrade): QualityGradeCriterion 
 }
 
 /**
+ * Issue-PR整合性の評価項目
+ * 各項目の重み（weight）の合計は100になる
+ */
+export const CONSISTENCY_CHECK_ITEMS: ConsistencyCheckItem[] = [
+  {
+    id: "issue-evaluability",
+    label: "Issue記述の評価可能性",
+    weight: 20,
+    description:
+      "Issueの要件が明確でPR評価が可能か。曖昧な記述の場合は減点し、改善点を指摘する。",
+  },
+  {
+    id: "requirement-coverage",
+    label: "要件網羅性",
+    weight: 30,
+    description:
+      "Issueに記載された要件がPRで実装されているか。未実装の要件がないか確認する。",
+  },
+  {
+    id: "scope-appropriateness",
+    label: "実装範囲の適切さ",
+    weight: 20,
+    description:
+      "過不足なく実装されているか。スコープクリープ（要件外の実装）がないか確認する。",
+  },
+  {
+    id: "acceptance-criteria-achievement",
+    label: "受け入れ条件の達成",
+    weight: 20,
+    description:
+      "Issueの受け入れ条件（AC）をPRが満たしているか。ACが明確な場合のみ評価可能。",
+  },
+  {
+    id: "pr-description-clarity",
+    label: "変更説明の明確さ",
+    weight: 10,
+    description:
+      "PR説明がIssueとの関連を明確にしているか。変更内容が適切に説明されているか。",
+  },
+];
+
+/**
+ * PR整合性評価のグレード定義
+ */
+export interface ConsistencyGradeCriterion {
+  grade: ConsistencyGrade;
+  minScore: number;
+  maxScore: number;
+  label: string;
+  description: string;
+}
+
+export const CONSISTENCY_GRADE_CRITERIA: ConsistencyGradeCriterion[] = [
+  {
+    grade: "A",
+    minScore: 81,
+    maxScore: 100,
+    label: "完全一致",
+    description: "Issueの要件が全て実装され、スコープも適切。模範的なPR。",
+  },
+  {
+    grade: "B",
+    minScore: 61,
+    maxScore: 80,
+    label: "概ね一致",
+    description: "主要な要件は実装されているが、一部改善の余地あり。",
+  },
+  {
+    grade: "C",
+    minScore: 41,
+    maxScore: 60,
+    label: "部分的に一致",
+    description: "要件の一部が未実装、またはスコープに問題あり。",
+  },
+  {
+    grade: "D",
+    minScore: 21,
+    maxScore: 40,
+    label: "乖離あり",
+    description: "Issueの要件とPRの実装に明確な乖離がある。",
+  },
+  {
+    grade: "E",
+    minScore: 0,
+    maxScore: 20,
+    label: "大幅な乖離",
+    description: "IssueとPRの関連性が不明、または大幅に異なる実装。",
+  },
+];
+
+/**
+ * 点数からPR整合性グレードを判定
+ */
+export function scoreToConsistencyGrade(score: number): ConsistencyGrade {
+  if (score >= 81) return "A";
+  if (score >= 61) return "B";
+  if (score >= 41) return "C";
+  if (score >= 21) return "D";
+  return "E";
+}
+
+/**
+ * PR整合性グレードの詳細情報を取得
+ */
+export function getConsistencyGradeInfo(grade: ConsistencyGrade): ConsistencyGradeCriterion | undefined {
+  return CONSISTENCY_GRADE_CRITERIA.find((c) => c.grade === grade);
+}
+
+/**
  * 評価基準のバリデーション
  * - 速度基準が正しくソートされているか
  * - 品質チェック項目の重みの合計が100か
+ * - 整合性チェック項目の重みの合計が100か
  */
 export function validateCriteria(): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
@@ -180,13 +290,24 @@ export function validateCriteria(): { valid: boolean; errors: string[] } {
   }
 
   // 品質チェック項目の重みの合計
-  const totalWeight = QUALITY_CHECK_ITEMS.reduce(
+  const qualityTotalWeight = QUALITY_CHECK_ITEMS.reduce(
     (sum, item) => sum + item.weight,
     0
   );
-  if (totalWeight !== 100) {
+  if (qualityTotalWeight !== 100) {
     errors.push(
-      `品質チェック項目の重みの合計が100ではありません: ${totalWeight}`
+      `品質チェック項目の重みの合計が100ではありません: ${qualityTotalWeight}`
+    );
+  }
+
+  // 整合性チェック項目の重みの合計
+  const consistencyTotalWeight = CONSISTENCY_CHECK_ITEMS.reduce(
+    (sum, item) => sum + item.weight,
+    0
+  );
+  if (consistencyTotalWeight !== 100) {
+    errors.push(
+      `整合性チェック項目の重みの合計が100ではありません: ${consistencyTotalWeight}`
     );
   }
 

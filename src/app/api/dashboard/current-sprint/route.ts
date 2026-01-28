@@ -51,6 +51,9 @@ interface UserStats {
   // 品質評価
   averageQualityScore: number | null;
   qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
+  // PR整合性評価
+  averageConsistencyScore: number | null;
+  consistencyGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
   issues: StoredIssue[];
 }
 
@@ -137,23 +140,27 @@ export async function GET(request: NextRequest) {
 
     const isCurrent = sprintOffset === 0;
 
-    // 同期状態チェック（現在のスプリントのみ）
-    if (!skipSync && isCurrent) {
-      const syncMetaRef = db.collection("repositories").doc(repoDocId).collection("syncMetadata").doc("latest");
-      const syncMetaDoc = await syncMetaRef.get();
+    // 同期メタデータを取得
+    const syncMetaRef = db.collection("repositories").doc(repoDocId).collection("syncMetadata").doc("latest");
+    const syncMetaDoc = await syncMetaRef.get();
+    let lastSyncAt: string | null = null;
 
-      let needsSync = false;
-      if (!syncMetaDoc.exists) {
-        needsSync = true;
-      } else {
-        const syncMeta = syncMetaDoc.data() as SyncMetadata;
-        needsSync = syncMeta.lastSyncSprintNumber !== currentSprintNumber;
-      }
+    if (syncMetaDoc.exists) {
+      const syncMeta = syncMetaDoc.data() as SyncMetadata;
+      lastSyncAt = syncMeta.lastSyncAt;
 
-      if (needsSync) {
-        const baseUrl = new URL(request.url).origin;
-        await triggerSync(baseUrl, repoDocId);
+      // 同期状態チェック（現在のスプリントのみ）
+      if (!skipSync && isCurrent) {
+        const needsSync = syncMeta.lastSyncSprintNumber !== currentSprintNumber;
+        if (needsSync) {
+          const baseUrl = new URL(request.url).origin;
+          await triggerSync(baseUrl, repoDocId);
+        }
       }
+    } else if (!skipSync && isCurrent) {
+      // メタデータがない場合は同期をトリガー
+      const baseUrl = new URL(request.url).origin;
+      await triggerSync(baseUrl, repoDocId);
     }
 
     // Firestoreからissueを取得
@@ -187,6 +194,8 @@ export async function GET(request: NextRequest) {
           gradeDistribution: { S: 0, A: 0, B: 0, C: 0 },
           averageQualityScore: null,
           qualityGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+          averageConsistencyScore: null,
+          consistencyGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
           issues: [],
         });
       }
@@ -206,6 +215,8 @@ export async function GET(request: NextRequest) {
           gradeDistribution: { S: 0, A: 0, B: 0, C: 0 },
           averageQualityScore: null,
           qualityGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
+          averageConsistencyScore: null,
+          consistencyGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
           issues: [],
         });
       }
@@ -227,6 +238,11 @@ export async function GET(request: NextRequest) {
       if (issue.qualityEvaluation) {
         stats.qualityGradeDistribution[issue.qualityEvaluation.grade]++;
       }
+
+      // PR整合性評価の集計
+      if (issue.consistencyEvaluation) {
+        stats.consistencyGradeDistribution[issue.consistencyEvaluation.grade]++;
+      }
     }
 
     // 平均スコア・時間を計算
@@ -240,19 +256,30 @@ export async function GET(request: NextRequest) {
       }
 
       // 品質スコアの平均を計算
-      const evaluatedIssues = stats.issues.filter((i) => i.qualityEvaluation !== null);
-      if (evaluatedIssues.length > 0) {
-        const totalQualityScore = evaluatedIssues.reduce(
+      const qualityEvaluatedIssues = stats.issues.filter((i) => i.qualityEvaluation !== null);
+      if (qualityEvaluatedIssues.length > 0) {
+        const totalQualityScore = qualityEvaluatedIssues.reduce(
           (sum, i) => sum + (i.qualityEvaluation?.totalScore || 0),
           0
         );
-        stats.averageQualityScore = Math.round((totalQualityScore / evaluatedIssues.length) * 10) / 10;
+        stats.averageQualityScore = Math.round((totalQualityScore / qualityEvaluatedIssues.length) * 10) / 10;
+      }
+
+      // PR整合性スコアの平均を計算
+      const consistencyEvaluatedIssues = stats.issues.filter((i) => i.consistencyEvaluation !== null);
+      if (consistencyEvaluatedIssues.length > 0) {
+        const totalConsistencyScore = consistencyEvaluatedIssues.reduce(
+          (sum, i) => sum + (i.consistencyEvaluation?.totalScore || 0),
+          0
+        );
+        stats.averageConsistencyScore = Math.round((totalConsistencyScore / consistencyEvaluatedIssues.length) * 10) / 10;
       }
     }
 
     // 全体統計
     const closedIssues = allIssues.filter((i) => i.state === "closed" && i.score !== null);
-    const evaluatedIssues = allIssues.filter((i) => i.qualityEvaluation !== null);
+    const qualityEvaluatedIssues = allIssues.filter((i) => i.qualityEvaluation !== null);
+    const consistencyEvaluatedIssues = allIssues.filter((i) => i.consistencyEvaluation !== null);
     const overallStats = {
       totalIssues: allIssues.length,
       closedIssues: closedIssues.length,
@@ -270,16 +297,28 @@ export async function GET(request: NextRequest) {
         C: closedIssues.filter((i) => i.grade === "C").length,
       },
       // 品質評価の統計
-      evaluatedIssues: evaluatedIssues.length,
-      averageQualityScore: evaluatedIssues.length > 0
-        ? Math.round((evaluatedIssues.reduce((sum, i) => sum + (i.qualityEvaluation?.totalScore || 0), 0) / evaluatedIssues.length) * 10) / 10
+      qualityEvaluatedIssues: qualityEvaluatedIssues.length,
+      averageQualityScore: qualityEvaluatedIssues.length > 0
+        ? Math.round((qualityEvaluatedIssues.reduce((sum, i) => sum + (i.qualityEvaluation?.totalScore || 0), 0) / qualityEvaluatedIssues.length) * 10) / 10
         : null,
       qualityGradeDistribution: {
-        A: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "A").length,
-        B: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "B").length,
-        C: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "C").length,
-        D: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "D").length,
-        E: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "E").length,
+        A: qualityEvaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "A").length,
+        B: qualityEvaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "B").length,
+        C: qualityEvaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "C").length,
+        D: qualityEvaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "D").length,
+        E: qualityEvaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "E").length,
+      },
+      // PR整合性評価の統計
+      consistencyEvaluatedIssues: consistencyEvaluatedIssues.length,
+      averageConsistencyScore: consistencyEvaluatedIssues.length > 0
+        ? Math.round((consistencyEvaluatedIssues.reduce((sum, i) => sum + (i.consistencyEvaluation?.totalScore || 0), 0) / consistencyEvaluatedIssues.length) * 10) / 10
+        : null,
+      consistencyGradeDistribution: {
+        A: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "A").length,
+        B: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "B").length,
+        C: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "C").length,
+        D: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "D").length,
+        E: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "E").length,
       },
     };
 
@@ -303,6 +342,7 @@ export async function GET(request: NextRequest) {
       trackedUsersCount: trackedUsers.length,
       overallStats,
       users: Array.from(userStatsMap.values()),
+      lastSyncAt,
     });
   } catch (error) {
     console.error("Dashboard API Error:", error);

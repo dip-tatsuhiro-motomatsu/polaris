@@ -42,6 +42,24 @@ interface QualityEvaluation {
   evaluatedAt: string;
 }
 
+interface ConsistencyCategoryScore {
+  categoryId: string;
+  categoryName: string;
+  score: number;
+  maxScore: number;
+  feedback: string;
+}
+
+interface ConsistencyEvaluation {
+  totalScore: number;
+  grade: "A" | "B" | "C" | "D" | "E";
+  linkedPRs: { number: number; title: string; url: string }[];
+  categories: ConsistencyCategoryScore[];
+  overallFeedback: string;
+  issueImprovementSuggestions: string[];
+  evaluatedAt: string;
+}
+
 interface IssueData {
   number: number;
   title: string;
@@ -53,6 +71,7 @@ interface IssueData {
   score: number | null;
   message: string | null;
   qualityEvaluation: QualityEvaluation | null;
+  consistencyEvaluation: ConsistencyEvaluation | null;
   creator: string;
   assignee: string | null;
   url: string;
@@ -64,6 +83,23 @@ function formatCompletionTime(hours: number | null): string | null {
   const days = Math.floor(hours / 24);
   const remainingHours = Math.round(hours % 24);
   return days > 0 ? `${days}日${remainingHours}時間` : `${remainingHours}時間`;
+}
+
+// 相対時間を表示用文字列に変換
+function formatRelativeTime(isoString: string | null): string | null {
+  if (!isoString) return null;
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMinutes < 1) return "たった今";
+  if (diffMinutes < 60) return `${diffMinutes}分前`;
+  if (diffHours < 24) return `${diffHours}時間前`;
+  if (diffDays < 7) return `${diffDays}日前`;
+  return date.toLocaleDateString("ja-JP", { month: "short", day: "numeric" });
 }
 
 interface GradeDistribution {
@@ -91,6 +127,8 @@ interface UserStats {
   gradeDistribution: GradeDistribution;
   averageQualityScore: number | null;
   qualityGradeDistribution: QualityGradeDistribution;
+  averageConsistencyScore: number | null;
+  consistencyGradeDistribution: QualityGradeDistribution;
   issues: IssueData[];
 }
 
@@ -112,11 +150,15 @@ interface DashboardData {
     averageScore: number | null;
     averageHours: number | null;
     gradeDistribution: GradeDistribution;
-    evaluatedIssues: number;
+    qualityEvaluatedIssues: number;
     averageQualityScore: number | null;
     qualityGradeDistribution: QualityGradeDistribution;
+    consistencyEvaluatedIssues: number;
+    averageConsistencyScore: number | null;
+    consistencyGradeDistribution: QualityGradeDistribution;
   };
   users: UserStats[];
+  lastSyncAt: string | null;
 }
 
 // グレードに応じた色を返す
@@ -249,6 +291,41 @@ function OverallStatsCard({ stats, title }: { stats: UserStats | DashboardData["
           </div>
         </div>
 
+        {/* PR整合性評価 */}
+        {"consistencyGradeDistribution" in stats && (
+          <div className="mb-4 pt-4 border-t">
+            <div className="text-sm text-muted-foreground mb-2 font-medium">PR整合性評価</div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="text-center">
+                <div className="text-2xl font-bold">
+                  {stats.averageConsistencyScore !== null ? (
+                    <span className={getQualityGradeColor(getQualityGradeFromScore(stats.averageConsistencyScore)).replace("bg-", "text-").replace(" text-white", "")}>
+                      {stats.averageConsistencyScore}
+                    </span>
+                  ) : (
+                    "-"
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground">平均スコア</div>
+              </div>
+              <div className="text-center">
+                <Badge className={`text-sm px-2 py-0.5 ${getQualityGradeColor(getQualityGradeFromScore(stats.averageConsistencyScore))}`}>
+                  {getQualityGradeFromScore(stats.averageConsistencyScore) || "-"}
+                </Badge>
+                <div className="text-xs text-muted-foreground mt-1">平均グレード</div>
+              </div>
+            </div>
+            <div className="flex gap-2 mt-2 justify-center flex-wrap">
+              {(["A", "B", "C", "D", "E"] as const).map((grade) => (
+                <div key={grade} className="flex items-center gap-1">
+                  <Badge className={`${getQualityGradeColor(grade)} text-xs`}>{grade}</Badge>
+                  <span className="text-xs">{stats.consistencyGradeDistribution[grade]}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Issue数 */}
         <div className="pt-4 border-t grid grid-cols-3 gap-2 text-center text-sm">
           <div>
@@ -345,15 +422,114 @@ function QualityEvaluationDialog({
   );
 }
 
+// PR整合性評価詳細ダイアログ
+function ConsistencyEvaluationDialog({
+  issue,
+  open,
+  onOpenChange,
+}: {
+  issue: IssueData | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  if (!issue?.consistencyEvaluation) return null;
+
+  const evaluation = issue.consistencyEvaluation;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <span>#{issue.number}</span>
+            <Badge className={getQualityGradeColor(evaluation.grade)}>
+              {evaluation.grade} ({evaluation.totalScore}点)
+            </Badge>
+          </DialogTitle>
+          <DialogDescription className="text-left">
+            {issue.title}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* リンクされたPR */}
+          {evaluation.linkedPRs.length > 0 && (
+            <div>
+              <h4 className="font-semibold mb-2">リンクされたPR</h4>
+              <ul className="space-y-1">
+                {evaluation.linkedPRs.map((pr) => (
+                  <li key={pr.number} className="text-sm">
+                    <a
+                      href={pr.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline"
+                    >
+                      #{pr.number}: {pr.title}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* カテゴリ別スコア */}
+          <div className="pt-4 border-t">
+            <h4 className="font-semibold mb-3">カテゴリ別評価</h4>
+            <div className="space-y-3">
+              {evaluation.categories.map((cat) => (
+                <div key={cat.categoryId} className="space-y-1">
+                  <div className="flex justify-between text-sm">
+                    <span>{cat.categoryName}</span>
+                    <span className="font-semibold">{cat.score}/{cat.maxScore}点</span>
+                  </div>
+                  <Progress value={(cat.score / cat.maxScore) * 100} className="h-2" />
+                  <p className="text-xs text-muted-foreground">{cat.feedback}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 総評 */}
+          <div className="pt-4 border-t">
+            <h4 className="font-semibold mb-2">総評</h4>
+            <p className="text-sm text-muted-foreground">{evaluation.overallFeedback}</p>
+          </div>
+
+          {/* Issue改善提案 */}
+          {evaluation.issueImprovementSuggestions.length > 0 && (
+            <div className="pt-4 border-t">
+              <h4 className="font-semibold mb-2">Issue記述の改善提案</h4>
+              <ul className="list-disc list-inside space-y-1">
+                {evaluation.issueImprovementSuggestions.map((suggestion, idx) => (
+                  <li key={idx} className="text-sm text-muted-foreground">{suggestion}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // Issue一覧テーブル
 function IssueTable({ issues }: { issues: IssueData[] }) {
   const [selectedIssue, setSelectedIssue] = useState<IssueData | null>(null);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [qualityDialogOpen, setQualityDialogOpen] = useState(false);
+  const [consistencyDialogOpen, setConsistencyDialogOpen] = useState(false);
 
   const handleQualityClick = (issue: IssueData) => {
     if (issue.qualityEvaluation) {
       setSelectedIssue(issue);
-      setDialogOpen(true);
+      setQualityDialogOpen(true);
+    }
+  };
+
+  const handleConsistencyClick = (issue: IssueData) => {
+    if (issue.consistencyEvaluation) {
+      setSelectedIssue(issue);
+      setConsistencyDialogOpen(true);
     }
   };
 
@@ -375,6 +551,7 @@ function IssueTable({ issues }: { issues: IssueData[] }) {
             <TableHead className="w-20">状態</TableHead>
             <TableHead className="w-20">速度</TableHead>
             <TableHead className="w-20">品質</TableHead>
+            <TableHead className="w-20">整合性</TableHead>
             <TableHead className="w-28">完了時間</TableHead>
           </TableRow>
         </TableHeader>
@@ -430,6 +607,21 @@ function IssueTable({ issues }: { issues: IssueData[] }) {
                 )}
               </TableCell>
               <TableCell>
+                {issue.consistencyEvaluation ? (
+                  <button
+                    onClick={() => handleConsistencyClick(issue)}
+                    className="flex items-center gap-1 hover:opacity-80 cursor-pointer"
+                  >
+                    <Badge className={getQualityGradeColor(issue.consistencyEvaluation.grade)}>
+                      {issue.consistencyEvaluation.grade}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">{issue.consistencyEvaluation.totalScore}</span>
+                  </button>
+                ) : (
+                  <span className="text-muted-foreground text-xs">-</span>
+                )}
+              </TableCell>
+              <TableCell>
                 {formatCompletionTime(issue.completionHours) || <span className="text-muted-foreground">-</span>}
               </TableCell>
             </TableRow>
@@ -439,8 +631,14 @@ function IssueTable({ issues }: { issues: IssueData[] }) {
 
       <QualityEvaluationDialog
         issue={selectedIssue}
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        open={qualityDialogOpen}
+        onOpenChange={setQualityDialogOpen}
+      />
+
+      <ConsistencyEvaluationDialog
+        issue={selectedIssue}
+        open={consistencyDialogOpen}
+        onOpenChange={setConsistencyDialogOpen}
       />
     </>
   );
@@ -589,14 +787,21 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleSync}
-            disabled={isSyncing}
-          >
-            {isSyncing ? "同期中..." : "GitHub同期"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSync}
+              disabled={isSyncing}
+            >
+              {isSyncing ? "同期中..." : "GitHub同期"}
+            </Button>
+            {data.lastSyncAt && (
+              <span className="text-xs text-muted-foreground">
+                {formatRelativeTime(data.lastSyncAt)}
+              </span>
+            )}
+          </div>
           <Button variant="outline" size="sm" onClick={goToPrevSprint}>
             ← 前のスプリント
           </Button>
