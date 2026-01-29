@@ -100,6 +100,39 @@ export interface StoredQualityEvaluation {
 }
 
 /**
+ * リンクされたPR情報（Firestore保存用）
+ */
+export interface StoredLinkedPR {
+  number: number;
+  title: string;
+  url: string;
+}
+
+/**
+ * PR整合性評価のカテゴリ別スコア（Firestore保存用）
+ */
+export interface StoredConsistencyCategoryScore {
+  categoryId: string;
+  categoryName: string;
+  score: number;
+  maxScore: number;
+  feedback: string;
+}
+
+/**
+ * Issue-PR整合性評価結果（Firestore保存用）
+ */
+export interface StoredConsistencyEvaluation {
+  totalScore: number;
+  grade: "A" | "B" | "C" | "D" | "E";
+  linkedPRs: StoredLinkedPR[];
+  categories: StoredConsistencyCategoryScore[];
+  overallFeedback: string;
+  issueImprovementSuggestions: string[];
+  evaluatedAt: string;
+}
+
+/**
  * Firestoreに保存するIssueデータ
  */
 export interface StoredIssue {
@@ -118,6 +151,9 @@ export interface StoredIssue {
 
   // 品質評価
   qualityEvaluation: StoredQualityEvaluation | null;
+
+  // PR整合性評価
+  consistencyEvaluation: StoredConsistencyEvaluation | null;
 
   creator: string;
   assignee: string | null;

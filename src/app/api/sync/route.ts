@@ -3,6 +3,8 @@ import { Octokit } from "@octokit/rest";
 import { getAdminFirestore } from "@/lib/firebase/admin";
 import { SPEED_CRITERIA } from "@/config/evaluation-criteria";
 import { evaluateIssueQuality } from "@/lib/evaluation/quality";
+import { evaluateConsistency } from "@/lib/evaluation/consistency";
+import { getLinkedPRsForIssue } from "@/lib/github/linked-prs";
 import type { Grade } from "@/types/evaluation";
 import type { RepositoryConfig, SyncMetadata, StoredIssue } from "@/types/settings";
 
@@ -46,8 +48,8 @@ function getSprintNumber(
   return Math.floor(diffDays / (durationWeeks * 7)) + 1;
 }
 
-// GitHub IssueをStoredIssue形式に変換（qualityEvaluationは含まない）
-// 品質評価は別途runQualityEvaluationで行い、既存の評価を上書きしないようにする
+// GitHub IssueをStoredIssue形式に変換（評価フィールドは含まない）
+// 品質評価・整合性評価は別途実行し、既存の評価を上書きしないようにする
 function convertToStoredIssue(
   issue: {
     number: number;
@@ -61,7 +63,7 @@ function convertToStoredIssue(
     html_url: string;
   },
   sprintNumber: number
-): Omit<StoredIssue, "qualityEvaluation"> {
+): Omit<StoredIssue, "qualityEvaluation" | "consistencyEvaluation"> {
   const createdAt = new Date(issue.created_at);
   const closedAt = issue.closed_at ? new Date(issue.closed_at) : null;
 
@@ -195,6 +197,115 @@ async function runQualityEvaluation(
   }
 
   return { evaluated, errors, initialized, total };
+}
+
+// 新規IssueにPR整合性評価フィールドを初期化する関数
+async function initializeConsistencyEvaluationField(
+  issuesRef: FirebaseFirestore.CollectionReference
+): Promise<number> {
+  const snapshot = await issuesRef.get();
+
+  let initialized = 0;
+  const batch = issuesRef.firestore.batch();
+
+  for (const doc of snapshot.docs) {
+    const data = doc.data();
+    // consistencyEvaluationフィールドが存在しない場合のみnullを設定
+    if (!("consistencyEvaluation" in data)) {
+      batch.update(doc.ref, { consistencyEvaluation: null });
+      initialized++;
+    }
+  }
+
+  if (initialized > 0) {
+    await batch.commit();
+  }
+
+  return initialized;
+}
+
+// PR整合性評価を実行する関数
+async function runConsistencyEvaluation(
+  issuesRef: FirebaseFirestore.CollectionReference,
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  options: { maxEvaluations?: number; delayMs?: number } = {}
+): Promise<{ evaluated: number; errors: number; skipped: number; initialized: number; total: number }> {
+  const { maxEvaluations, delayMs = 2000 } = options; // PRの取得があるため長めの待機
+
+  // まず、consistencyEvaluationフィールドが存在しないドキュメントを初期化
+  const initialized = await initializeConsistencyEvaluationField(issuesRef);
+  console.log(`Initialized ${initialized} issues with consistencyEvaluation: null`);
+
+  // PR整合性評価がまだされていない「クローズ済み」Issueを取得
+  // クローズされていないIssueはPRがマージされていない可能性が高いためスキップ
+  let query = issuesRef
+    .where("consistencyEvaluation", "==", null)
+    .where("state", "==", "closed");
+  if (maxEvaluations) {
+    query = query.limit(maxEvaluations);
+  }
+  const unevaluatedSnapshot = await query.get();
+  const total = unevaluatedSnapshot.size;
+
+  console.log(`Found ${total} closed issues to evaluate for PR consistency`);
+
+  let evaluated = 0;
+  let errors = 0;
+  let skipped = 0;
+
+  for (const doc of unevaluatedSnapshot.docs) {
+    const issueData = doc.data() as StoredIssue;
+
+    try {
+      console.log(`Checking linked PRs for issue #${issueData.number}: ${issueData.title} (${evaluated + skipped + 1}/${total})`);
+
+      // リンクされたPRを取得
+      const linkedPRs = await getLinkedPRsForIssue(octokit, owner, repo, issueData.number);
+
+      if (linkedPRs.length === 0) {
+        console.log(`Issue #${issueData.number} has no linked PRs, skipping`);
+        skipped++;
+        continue;
+      }
+
+      console.log(`Evaluating consistency for issue #${issueData.number} with ${linkedPRs.length} linked PR(s)`);
+
+      const evaluation = await evaluateConsistency(
+        {
+          number: issueData.number,
+          title: issueData.title,
+          body: issueData.body,
+        },
+        linkedPRs
+      );
+
+      await doc.ref.update({
+        consistencyEvaluation: evaluation,
+        updatedAt: new Date().toISOString(),
+      });
+
+      evaluated++;
+      console.log(`Issue #${issueData.number} consistency evaluated: ${evaluation.grade} (${evaluation.totalScore}点)`);
+
+      // API制限を避けるため、次の評価まで待機
+      if (evaluated + skipped < total) {
+        await delay(delayMs);
+      }
+    } catch (error: unknown) {
+      console.error(`Failed to evaluate consistency for issue #${issueData.number}:`, error);
+      errors++;
+
+      // レート制限エラーの場合は長めに待機
+      if (error instanceof Error && error.message?.includes("429")) {
+        console.log("Rate limit hit, waiting 60 seconds...");
+        await delay(60000);
+      }
+    }
+  }
+
+  return { evaluated, errors, skipped, initialized, total };
 }
 
 export async function POST(request: NextRequest) {
@@ -420,15 +531,30 @@ export async function POST(request: NextRequest) {
 
     // 品質評価を実行（GEMINI_API_KEYが設定されている場合のみ）
     let qualityEvaluationStats = { evaluated: 0, errors: 0, initialized: 0, total: 0 };
+    let consistencyEvaluationStats = { evaluated: 0, errors: 0, skipped: 0, initialized: 0, total: 0 };
+
     if (process.env.GEMINI_API_KEY) {
       try {
-        // 全ての未評価Issueを評価（制限なし、1秒間隔）
+        // 全ての未評価Issueを品質評価（制限なし、1秒間隔）
         qualityEvaluationStats = await runQualityEvaluation(issuesRef, { delayMs: 1000 });
       } catch (error) {
         console.error("Quality evaluation error:", error);
       }
+
+      try {
+        // 全ての未評価クローズ済みIssueをPR整合性評価（制限なし、2秒間隔）
+        consistencyEvaluationStats = await runConsistencyEvaluation(
+          issuesRef,
+          octokit,
+          owner,
+          repo,
+          { delayMs: 2000 }
+        );
+      } catch (error) {
+        console.error("Consistency evaluation error:", error);
+      }
     } else {
-      console.log("GEMINI_API_KEY is not set, skipping quality evaluation");
+      console.log("GEMINI_API_KEY is not set, skipping AI evaluations");
     }
 
     return NextResponse.json({
@@ -443,6 +569,11 @@ export async function POST(request: NextRequest) {
         qualityInitialized: qualityEvaluationStats.initialized,
         qualityEvaluated: qualityEvaluationStats.evaluated,
         qualityErrors: qualityEvaluationStats.errors,
+        consistencyTotal: consistencyEvaluationStats.total,
+        consistencyInitialized: consistencyEvaluationStats.initialized,
+        consistencyEvaluated: consistencyEvaluationStats.evaluated,
+        consistencySkipped: consistencyEvaluationStats.skipped,
+        consistencyErrors: consistencyEvaluationStats.errors,
       },
     });
   } catch (error) {
