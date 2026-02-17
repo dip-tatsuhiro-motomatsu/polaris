@@ -73,6 +73,81 @@ export async function getContributors(owner: string, repo: string) {
 }
 
 /**
+ * GitHubリポジトリのIssue一覧を取得（ページネーション対応）
+ * @param owner - リポジトリオーナー
+ * @param repo - リポジトリ名
+ * @param since - この日時以降に更新されたIssueのみ取得（オプション）
+ */
+export async function getIssues(owner: string, repo: string, since?: Date) {
+  const octokit = getOctokit();
+  const allIssues: Awaited<ReturnType<typeof octokit.rest.issues.listForRepo>>["data"] = [];
+
+  let page = 1;
+  const perPage = 100;
+
+  while (true) {
+    const response = await octokit.rest.issues.listForRepo({
+      owner,
+      repo,
+      state: "all",
+      sort: "updated",
+      direction: "desc",
+      per_page: perPage,
+      page,
+      since: since?.toISOString(),
+    });
+
+    allIssues.push(...response.data);
+
+    if (response.data.length < perPage) break;
+    page++;
+  }
+
+  return allIssues;
+}
+
+/**
+ * GitHubリポジトリのPullRequest一覧を取得（ページネーション対応）
+ * @param owner - リポジトリオーナー
+ * @param repo - リポジトリ名
+ * @param since - この日時以降に更新されたPRのみ取得（オプション）
+ */
+export async function getPullRequests(owner: string, repo: string, since?: Date) {
+  const octokit = getOctokit();
+  const allPRs: Awaited<ReturnType<typeof octokit.rest.pulls.list>>["data"] = [];
+
+  let page = 1;
+  const perPage = 100;
+
+  while (true) {
+    const response = await octokit.rest.pulls.list({
+      owner,
+      repo,
+      state: "all",
+      sort: "updated",
+      direction: "desc",
+      per_page: perPage,
+      page,
+    });
+
+    // sinceが指定されている場合、それ以降のPRのみフィルタリング
+    const filtered = since
+      ? response.data.filter((pr) => new Date(pr.updated_at) >= since)
+      : response.data;
+
+    allPRs.push(...filtered);
+
+    // sinceでフィルタリングした結果が空、またはページネーション終了
+    if (response.data.length < perPage || (since && filtered.length < response.data.length)) {
+      break;
+    }
+    page++;
+  }
+
+  return allPRs;
+}
+
+/**
  * GitHubリポジトリのIssue作成日の範囲を取得
  * 追跡開始日の基準として使用
  */
