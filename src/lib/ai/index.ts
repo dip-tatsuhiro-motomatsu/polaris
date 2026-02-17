@@ -1,8 +1,8 @@
 /**
  * AI モジュール
- * AIクライアントの抽象化レイヤーを提供
+ * Vercel AI SDK による抽象化レイヤーを提供
  */
 
 export * from "./types";
 export * from "./client-factory";
-export * from "./gemini-client";
+export * from "./vercel-ai-client";
