@@ -8,35 +8,39 @@ import { config } from "dotenv";
 config({ path: ".env.local" });
 config({ path: ".env" });
 
-import { GeminiClient } from "../src/lib/ai/gemini-client";
+import { getAIClient, isAIConfigured } from "../src/lib/ai";
 import { evaluateIssueQuality } from "../src/lib/evaluation/quality";
 
-async function testGeminiConnection() {
+async function testAIConnection() {
   console.log("=".repeat(60));
-  console.log("1. Gemini API 接続テスト");
+  console.log("1. AI API 接続テスト");
   console.log("=".repeat(60));
 
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    console.error("❌ GEMINI_API_KEY が設定されていません");
-    console.log("   .env.local に GEMINI_API_KEY=your_api_key を追加してください");
+  const provider = process.env.AI_PROVIDER || "gemini";
+  console.log(`   プロバイダー: ${provider}`);
+
+  if (!isAIConfigured()) {
+    console.error("❌ AI APIキーが設定されていません");
+    console.log("   .env.local に適切なAPIキーを追加してください");
+    console.log("   Gemini: GOOGLE_GENERATIVE_AI_API_KEY=your_api_key");
+    console.log("   OpenAI: OPENAI_API_KEY=your_api_key");
     return false;
   }
 
-  console.log("✅ GEMINI_API_KEY が設定されています");
+  console.log("✅ APIキーが設定されています");
 
   try {
-    const client = new GeminiClient(apiKey);
+    const client = getAIClient();
     const response = await client.generate({
       messages: [{ role: "user", content: "Hello, this is a test. Reply with 'OK'." }],
       maxTokens: 50,
     });
 
-    console.log("✅ Gemini API 接続成功");
+    console.log("✅ AI API 接続成功");
     console.log(`   レスポンス: ${response.content.trim()}`);
     return true;
   } catch (error) {
-    console.error("❌ Gemini API 接続失敗:", error);
+    console.error("❌ AI API 接続失敗:", error);
     return false;
   }
 }
@@ -105,9 +109,9 @@ async function testQualityEvaluation() {
 async function main() {
   console.log("品質評価機能テスト開始\n");
 
-  const geminiOk = await testGeminiConnection();
-  if (!geminiOk) {
-    console.log("\n❌ Gemini API接続テストに失敗したため、テストを中断します");
+  const aiOk = await testAIConnection();
+  if (!aiOk) {
+    console.log("\n❌ AI API接続テストに失敗したため、テストを中断します");
     process.exit(1);
   }
 

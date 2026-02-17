@@ -51,4 +51,4 @@ export interface AIClient {
 /**
  * AIプロバイダーの種類
  */
-export type AIProvider = "gemini" | "openai" | "anthropic";
+export type AIProvider = "gemini" | "openai";

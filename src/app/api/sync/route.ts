@@ -4,6 +4,7 @@ import { getAdminFirestore } from "@/lib/firebase/admin";
 import { SPEED_CRITERIA } from "@/config/evaluation-criteria";
 import { evaluateIssueQuality } from "@/lib/evaluation/quality";
 import { evaluateConsistency } from "@/lib/evaluation/consistency";
+import { isAIConfigured } from "@/lib/ai";
 import { getLinkedPRsForIssue } from "@/lib/github/linked-prs";
 import type { Grade } from "@/types/evaluation";
 import type { RepositoryConfig, SyncMetadata, StoredIssue } from "@/types/settings";
@@ -529,11 +530,11 @@ export async function POST(request: NextRequest) {
       lastSyncSprintStart: currentSprintStart.toISOString(),
     });
 
-    // 品質評価を実行（GEMINI_API_KEYが設定されている場合のみ）
+    // 品質評価を実行（AIプロバイダーのAPIキーが設定されている場合のみ）
     let qualityEvaluationStats = { evaluated: 0, errors: 0, initialized: 0, total: 0 };
     let consistencyEvaluationStats = { evaluated: 0, errors: 0, skipped: 0, initialized: 0, total: 0 };
 
-    if (process.env.GEMINI_API_KEY) {
+    if (isAIConfigured()) {
       try {
         // 全ての未評価Issueを品質評価（制限なし、1秒間隔）
         qualityEvaluationStats = await runQualityEvaluation(issuesRef, { delayMs: 1000 });
@@ -554,7 +555,7 @@ export async function POST(request: NextRequest) {
         console.error("Consistency evaluation error:", error);
       }
     } else {
-      console.log("GEMINI_API_KEY is not set, skipping AI evaluations");
+      console.log("AI provider API key is not set, skipping AI evaluations");
     }
 
     return NextResponse.json({
