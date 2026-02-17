@@ -1,0 +1,1 @@
+ALTER TABLE "repositories" ALTER COLUMN "pat_encrypted" DROP NOT NULL;

@@ -14,7 +14,6 @@
 import { Score } from "./Score";
 
 const MAX_ITEM_SCORE = 25;
-const ITEM_COUNT = 4;
 
 export interface IssueQualityItemScores {
   /** ユーザーストーリー（0-25点） */

@@ -58,3 +58,53 @@ export async function getRepositoryInfo(owner: string, repo: string) {
   const response = await octokit.rest.repos.get({ owner, repo });
   return response.data;
 }
+
+/**
+ * GitHubリポジトリのコントリビューター一覧を取得
+ */
+export async function getContributors(owner: string, repo: string) {
+  const octokit = getOctokit();
+  const response = await octokit.rest.repos.listContributors({
+    owner,
+    repo,
+    per_page: 100,
+  });
+  return response.data;
+}
+
+/**
+ * GitHubリポジトリのIssue作成日の範囲を取得
+ * 追跡開始日の基準として使用
+ */
+export async function getIssuesDateRange(owner: string, repo: string) {
+  const octokit = getOctokit();
+
+  // 最初のIssue（oldest）
+  const oldestResponse = await octokit.rest.issues.listForRepo({
+    owner,
+    repo,
+    state: "all",
+    sort: "created",
+    direction: "asc",
+    per_page: 1,
+  });
+
+  // 最新のIssue
+  const newestResponse = await octokit.rest.issues.listForRepo({
+    owner,
+    repo,
+    state: "all",
+    sort: "created",
+    direction: "desc",
+    per_page: 1,
+  });
+
+  const oldest = oldestResponse.data.filter((i) => !i.pull_request)[0];
+  const newest = newestResponse.data.filter((i) => !i.pull_request)[0];
+
+  return {
+    oldestIssueDate: oldest?.created_at ?? null,
+    newestIssueDate: newest?.created_at ?? null,
+    totalIssues: oldestResponse.data.length > 0 ? "1+" : "0",
+  };
+}

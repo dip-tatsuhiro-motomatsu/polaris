@@ -54,7 +54,7 @@ users
 | id | BIGSERIAL | PK | 自動連番 |
 | owner_name | TEXT | NOT NULL | GitHubオーナー名 |
 | repo_name | TEXT | NOT NULL | GitHubリポジトリ名 |
-| pat_encrypted | TEXT | NOT NULL | GitHub PAT（暗号化済み） |
+| pat_encrypted | TEXT | | GitHub PAT（暗号化済み、NULL時は.envのGITHUB_PERSONAL_ACCESS_TOKENを使用） |
 | tracking_start_date | DATE | NOT NULL | 計測開始日（スプリント1開始日） |
 | sprint_duration_weeks | INT | NOT NULL, DEFAULT 1 | スプリント周期（1 or 2週間） |
 | created_at | TIMESTAMPTZ | NOT NULL, DEFAULT NOW() | 作成日時 |
