@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -10,7 +11,9 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { EvaluationBadge } from "./EvaluationBadge";
+import { QualityFeedbackModal } from "./QualityFeedbackModal";
 import type { Issue } from "@/types/issue";
+import type { IssueQualityEvaluation } from "@/types/evaluation";
 
 interface IssueTableProps {
   issues: Issue[];
@@ -25,6 +28,42 @@ export function IssueTable({
   showQualityEvaluation = false,
   onIssueClick,
 }: IssueTableProps) {
+  const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const handleQualityBadgeClick = (
+    e: React.MouseEvent,
+    issue: Issue
+  ) => {
+    e.stopPropagation();
+    setSelectedIssue(issue);
+    setIsModalOpen(true);
+  };
+
+  const getQualityEvaluation = (issue: Issue): IssueQualityEvaluation | null => {
+    const evaluation = issue.qualityEvaluation;
+    if (!evaluation?.details) return null;
+
+    const details = evaluation.details as {
+      categories?: IssueQualityEvaluation["categories"];
+      overallFeedback?: string;
+      improvementSuggestions?: string[];
+    };
+
+    if (!details.categories) return null;
+
+    return {
+      totalScore: evaluation.score,
+      grade: evaluation.grade as IssueQualityEvaluation["grade"],
+      categories: details.categories,
+      overallFeedback: details.overallFeedback || evaluation.message,
+      improvementSuggestions: details.improvementSuggestions || [],
+      evaluatedAt:
+        typeof evaluation.evaluatedAt === "string"
+          ? evaluation.evaluatedAt
+          : evaluation.evaluatedAt.toISOString(),
+    };
+  };
   const formatDate = (date: Date | string | null) => {
     if (!date) return "-";
     return new Date(date).toLocaleDateString("ja-JP");
@@ -39,6 +78,7 @@ export function IssueTable({
   }
 
   return (
+    <>
     <Table>
       <TableHeader>
         <TableRow>
@@ -94,7 +134,14 @@ export function IssueTable({
             )}
             {showQualityEvaluation && (
               <TableCell>
-                <EvaluationBadge evaluation={issue.qualityEvaluation} />
+                <button
+                  type="button"
+                  onClick={(e) => handleQualityBadgeClick(e, issue)}
+                  className="hover:opacity-80 transition-opacity"
+                  title="クリックして詳細を表示"
+                >
+                  <EvaluationBadge evaluation={issue.qualityEvaluation} />
+                </button>
               </TableCell>
             )}
             <TableCell>{formatDate(issue.createdAt)}</TableCell>
@@ -103,5 +150,13 @@ export function IssueTable({
         ))}
       </TableBody>
     </Table>
+
+    <QualityFeedbackModal
+      open={isModalOpen}
+      onOpenChange={setIsModalOpen}
+      issue={selectedIssue}
+      evaluation={selectedIssue ? getQualityEvaluation(selectedIssue) : null}
+    />
+  </>
   );
 }
