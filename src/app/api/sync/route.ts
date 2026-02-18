@@ -1,121 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Octokit } from "@octokit/rest";
-import { getAdminFirestore } from "@/lib/firebase/admin";
-import { SPEED_CRITERIA } from "@/config/evaluation-criteria";
+import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
+import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
+import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
+import { SyncMetadataRepository } from "@/infrastructure/repositories/sync-metadata-repository";
+import { EvaluationRepository } from "@/infrastructure/repositories/evaluation-repository";
 import { evaluateIssueQuality } from "@/lib/evaluation/quality";
 import { evaluateConsistency } from "@/lib/evaluation/consistency";
 import { getLinkedPRsForIssue } from "@/lib/github/linked-prs";
 import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
-import type { Grade } from "@/types/evaluation";
-import type { RepositoryConfig, SyncMetadata, StoredIssue } from "@/types/settings";
+import type { NewIssue, Issue, Evaluation } from "@/infrastructure/database/schema";
 
 export const dynamic = "force-dynamic";
 
-// 完了時間から評価を取得
-function getGradeFromHours(hours: number): { grade: Grade; score: number; message: string } {
-  for (const criterion of SPEED_CRITERIA) {
-    if (hours <= criterion.maxHours) {
-      return {
-        grade: criterion.grade,
-        score: criterion.score,
-        message: criterion.message,
-      };
-    }
-  }
-  const last = SPEED_CRITERIA[SPEED_CRITERIA.length - 1];
-  return { grade: last.grade, score: last.score, message: last.message };
-}
+const repositoryRepo = new RepositoryRepository();
+const issueRepo = new IssueRepository();
+const collaboratorRepo = new CollaboratorRepository();
+const syncMetadataRepo = new SyncMetadataRepository();
+const evaluationRepo = new EvaluationRepository();
 
 // SprintCalculatorのファクトリ関数
-function createSprintCalculator(sprint: RepositoryConfig["sprint"]): SprintCalculator {
+function createSprintCalculator(repository: {
+  sprintStartDayOfWeek: number;
+  sprintDurationWeeks: number;
+  trackingStartDate: string | null;
+}): SprintCalculator {
   const config: SprintConfig = {
-    startDayOfWeek: sprint.startDayOfWeek,
-    durationWeeks: sprint.durationWeeks,
-    baseDate: new Date(sprint.baseDate),
+    startDayOfWeek: repository.sprintStartDayOfWeek,
+    durationWeeks: repository.sprintDurationWeeks,
+    baseDate: repository.trackingStartDate
+      ? new Date(repository.trackingStartDate)
+      : new Date(),
   };
   return new SprintCalculator(config);
-}
-
-// GitHub IssueをStoredIssue形式に変換（評価フィールドは含まない）
-// 品質評価・整合性評価は別途実行し、既存の評価を上書きしないようにする
-function convertToStoredIssue(
-  issue: {
-    number: number;
-    title: string;
-    body?: string | null;
-    state: string;
-    created_at: string;
-    closed_at: string | null;
-    user: { login: string } | null;
-    assignee: { login: string } | null;
-    html_url: string;
-  },
-  sprintNumber: number
-): Omit<StoredIssue, "qualityEvaluation" | "consistencyEvaluation"> {
-  const createdAt = new Date(issue.created_at);
-  const closedAt = issue.closed_at ? new Date(issue.closed_at) : null;
-
-  let completionHours: number | null = null;
-  let grade: Grade | null = null;
-  let score: number | null = null;
-  let message: string | null = null;
-
-  if (closedAt) {
-    const diffMs = closedAt.getTime() - createdAt.getTime();
-    const diffHours = diffMs / (1000 * 60 * 60);
-    completionHours = Math.round(diffHours * 10) / 10;
-    const evaluation = getGradeFromHours(diffHours);
-    grade = evaluation.grade;
-    score = evaluation.score;
-    message = evaluation.message;
-  }
-
-  return {
-    number: issue.number,
-    title: issue.title,
-    body: issue.body || null,
-    state: issue.state as "open" | "closed",
-    createdAt: issue.created_at,
-    closedAt: issue.closed_at,
-    completionHours,
-    grade,
-    score,
-    message,
-    creator: issue.user?.login || "unknown",
-    assignee: issue.assignee?.login || null,
-    url: issue.html_url,
-    sprintNumber,
-    isArchived: false,
-    updatedAt: new Date().toISOString(),
-  };
-}
-
-// 新規Issueに品質評価フィールドを初期化する関数
-async function initializeQualityEvaluationField(
-  issuesRef: FirebaseFirestore.CollectionReference
-): Promise<number> {
-  // qualityEvaluationフィールドが存在しないドキュメントを取得
-  // Firestoreでは存在しないフィールドはnullと等しくないため、
-  // 全ドキュメントを取得してフィルタリングする必要がある
-  const snapshot = await issuesRef.get();
-
-  let initialized = 0;
-  const batch = issuesRef.firestore.batch();
-
-  for (const doc of snapshot.docs) {
-    const data = doc.data();
-    // qualityEvaluationフィールドが存在しない場合のみnullを設定
-    if (!("qualityEvaluation" in data)) {
-      batch.update(doc.ref, { qualityEvaluation: null });
-      initialized++;
-    }
-  }
-
-  if (initialized > 0) {
-    await batch.commit();
-  }
-
-  return initialized;
 }
 
 // 遅延関数
@@ -125,58 +42,74 @@ function delay(ms: number): Promise<void> {
 
 // 品質評価を実行する関数
 async function runQualityEvaluation(
-  issuesRef: FirebaseFirestore.CollectionReference,
+  repositoryId: number,
   options: { maxEvaluations?: number; delayMs?: number } = {}
-): Promise<{ evaluated: number; errors: number; initialized: number; total: number }> {
-  const { maxEvaluations, delayMs = 1000 } = options; // デフォルト1秒の待機
-
-  // まず、qualityEvaluationフィールドが存在しないドキュメントを初期化
-  const initialized = await initializeQualityEvaluationField(issuesRef);
-  console.log(`Initialized ${initialized} issues with qualityEvaluation: null`);
+): Promise<{ evaluated: number; errors: number; total: number }> {
+  const { maxEvaluations, delayMs = 1000 } = options;
 
   // 品質評価がまだされていないIssueを取得
-  let query = issuesRef.where("qualityEvaluation", "==", null);
-  if (maxEvaluations) {
-    query = query.limit(maxEvaluations);
-  }
-  const unevaluatedSnapshot = await query.get();
-  const total = unevaluatedSnapshot.size;
+  const allIssues = await issueRepo.findByRepositoryId(repositoryId);
 
-  console.log(`Found ${total} issues to evaluate`);
+  // 評価データを取得して、未評価のIssueをフィルタ
+  const unevaluatedIssues: { issue: Issue; evaluation: Evaluation | null }[] = [];
+
+  for (const issue of allIssues) {
+    const evaluation = await evaluationRepo.findByIssueId(issue.id);
+    if (!evaluation || evaluation.qualityScore === null) {
+      unevaluatedIssues.push({ issue, evaluation });
+    }
+  }
+
+  const total = maxEvaluations
+    ? Math.min(unevaluatedIssues.length, maxEvaluations)
+    : unevaluatedIssues.length;
+
+  console.log(`Found ${total} issues to evaluate for quality`);
 
   let evaluated = 0;
   let errors = 0;
 
-  for (const doc of unevaluatedSnapshot.docs) {
-    const issueData = doc.data() as StoredIssue;
+  const issuesToEvaluate = unevaluatedIssues.slice(0, total);
 
+  for (const { issue } of issuesToEvaluate) {
     try {
-      console.log(`Evaluating issue #${issueData.number}: ${issueData.title} (${evaluated + 1}/${total})`);
+      console.log(`Evaluating issue #${issue.githubNumber}: ${issue.title} (${evaluated + 1}/${total})`);
 
-      const evaluation = await evaluateIssueQuality({
-        number: issueData.number,
-        title: issueData.title,
-        body: issueData.body,
-        assignee: issueData.assignee,
+      // assigneeの名前を取得
+      let assigneeName: string | null = null;
+      if (issue.assigneeCollaboratorId) {
+        const assignee = await collaboratorRepo.findById(issue.assigneeCollaboratorId);
+        assigneeName = assignee?.githubUserName || null;
+      }
+
+      const qualityResult = await evaluateIssueQuality({
+        number: issue.githubNumber,
+        title: issue.title,
+        body: issue.body,
+        assignee: assigneeName,
       });
 
-      await doc.ref.update({
-        qualityEvaluation: evaluation,
-        updatedAt: new Date().toISOString(),
+      await evaluationRepo.saveQualityEvaluation({
+        issueId: issue.id,
+        score: qualityResult.totalScore,
+        grade: qualityResult.grade,
+        details: {
+          categories: qualityResult.categories,
+          overallFeedback: qualityResult.overallFeedback,
+          improvementSuggestions: qualityResult.improvementSuggestions,
+        },
       });
 
       evaluated++;
-      console.log(`Issue #${issueData.number} evaluated: ${evaluation.grade} (${evaluation.totalScore}点)`);
+      console.log(`Issue #${issue.githubNumber} evaluated: ${qualityResult.grade} (${qualityResult.totalScore}点)`);
 
-      // API制限を避けるため、次の評価まで待機（最後の1件は待機不要）
       if (evaluated < total) {
         await delay(delayMs);
       }
     } catch (error: unknown) {
-      console.error(`Failed to evaluate issue #${issueData.number}:`, error);
+      console.error(`Failed to evaluate issue #${issue.githubNumber}:`, error);
       errors++;
 
-      // レート制限エラーの場合は長めに待機してリトライ
       if (error instanceof Error && error.message?.includes("429")) {
         console.log("Rate limit hit, waiting 60 seconds...");
         await delay(60000);
@@ -184,58 +117,35 @@ async function runQualityEvaluation(
     }
   }
 
-  return { evaluated, errors, initialized, total };
-}
-
-// 新規IssueにPR整合性評価フィールドを初期化する関数
-async function initializeConsistencyEvaluationField(
-  issuesRef: FirebaseFirestore.CollectionReference
-): Promise<number> {
-  const snapshot = await issuesRef.get();
-
-  let initialized = 0;
-  const batch = issuesRef.firestore.batch();
-
-  for (const doc of snapshot.docs) {
-    const data = doc.data();
-    // consistencyEvaluationフィールドが存在しない場合のみnullを設定
-    if (!("consistencyEvaluation" in data)) {
-      batch.update(doc.ref, { consistencyEvaluation: null });
-      initialized++;
-    }
-  }
-
-  if (initialized > 0) {
-    await batch.commit();
-  }
-
-  return initialized;
+  return { evaluated, errors, total };
 }
 
 // PR整合性評価を実行する関数
 async function runConsistencyEvaluation(
-  issuesRef: FirebaseFirestore.CollectionReference,
+  repositoryId: number,
   octokit: Octokit,
   owner: string,
   repo: string,
   options: { maxEvaluations?: number; delayMs?: number } = {}
-): Promise<{ evaluated: number; errors: number; skipped: number; initialized: number; total: number }> {
-  const { maxEvaluations, delayMs = 2000 } = options; // PRの取得があるため長めの待機
+): Promise<{ evaluated: number; errors: number; skipped: number; total: number }> {
+  const { maxEvaluations, delayMs = 2000 } = options;
 
-  // まず、consistencyEvaluationフィールドが存在しないドキュメントを初期化
-  const initialized = await initializeConsistencyEvaluationField(issuesRef);
-  console.log(`Initialized ${initialized} issues with consistencyEvaluation: null`);
+  // クローズ済みで整合性評価がまだされていないIssueを取得
+  const allIssues = await issueRepo.findByRepositoryId(repositoryId);
+  const closedIssues = allIssues.filter((issue) => issue.state === "closed");
 
-  // PR整合性評価がまだされていない「クローズ済み」Issueを取得
-  // クローズされていないIssueはPRがマージされていない可能性が高いためスキップ
-  let query = issuesRef
-    .where("consistencyEvaluation", "==", null)
-    .where("state", "==", "closed");
-  if (maxEvaluations) {
-    query = query.limit(maxEvaluations);
+  const unevaluatedIssues: Issue[] = [];
+
+  for (const issue of closedIssues) {
+    const evaluation = await evaluationRepo.findByIssueId(issue.id);
+    if (!evaluation || evaluation.consistencyScore === null) {
+      unevaluatedIssues.push(issue);
+    }
   }
-  const unevaluatedSnapshot = await query.get();
-  const total = unevaluatedSnapshot.size;
+
+  const total = maxEvaluations
+    ? Math.min(unevaluatedIssues.length, maxEvaluations)
+    : unevaluatedIssues.length;
 
   console.log(`Found ${total} closed issues to evaluate for PR consistency`);
 
@@ -243,49 +153,53 @@ async function runConsistencyEvaluation(
   let errors = 0;
   let skipped = 0;
 
-  for (const doc of unevaluatedSnapshot.docs) {
-    const issueData = doc.data() as StoredIssue;
+  const issuesToEvaluate = unevaluatedIssues.slice(0, total);
 
+  for (const issue of issuesToEvaluate) {
     try {
-      console.log(`Checking linked PRs for issue #${issueData.number}: ${issueData.title} (${evaluated + skipped + 1}/${total})`);
+      console.log(`Checking linked PRs for issue #${issue.githubNumber}: ${issue.title} (${evaluated + skipped + 1}/${total})`);
 
-      // リンクされたPRを取得
-      const linkedPRs = await getLinkedPRsForIssue(octokit, owner, repo, issueData.number);
+      const linkedPRs = await getLinkedPRsForIssue(octokit, owner, repo, issue.githubNumber);
 
       if (linkedPRs.length === 0) {
-        console.log(`Issue #${issueData.number} has no linked PRs, skipping`);
+        console.log(`Issue #${issue.githubNumber} has no linked PRs, skipping`);
         skipped++;
         continue;
       }
 
-      console.log(`Evaluating consistency for issue #${issueData.number} with ${linkedPRs.length} linked PR(s)`);
+      console.log(`Evaluating consistency for issue #${issue.githubNumber} with ${linkedPRs.length} linked PR(s)`);
 
-      const evaluation = await evaluateConsistency(
+      const consistencyResult = await evaluateConsistency(
         {
-          number: issueData.number,
-          title: issueData.title,
-          body: issueData.body,
+          number: issue.githubNumber,
+          title: issue.title,
+          body: issue.body,
         },
         linkedPRs
       );
 
-      await doc.ref.update({
-        consistencyEvaluation: evaluation,
-        updatedAt: new Date().toISOString(),
+      await evaluationRepo.saveConsistencyEvaluation({
+        issueId: issue.id,
+        score: consistencyResult.totalScore,
+        grade: consistencyResult.grade,
+        details: {
+          linkedPRs: consistencyResult.linkedPRs,
+          categories: consistencyResult.categories,
+          overallFeedback: consistencyResult.overallFeedback,
+          issueImprovementSuggestions: consistencyResult.issueImprovementSuggestions,
+        },
       });
 
       evaluated++;
-      console.log(`Issue #${issueData.number} consistency evaluated: ${evaluation.grade} (${evaluation.totalScore}点)`);
+      console.log(`Issue #${issue.githubNumber} consistency evaluated: ${consistencyResult.grade} (${consistencyResult.totalScore}点)`);
 
-      // API制限を避けるため、次の評価まで待機
       if (evaluated + skipped < total) {
         await delay(delayMs);
       }
     } catch (error: unknown) {
-      console.error(`Failed to evaluate consistency for issue #${issueData.number}:`, error);
+      console.error(`Failed to evaluate consistency for issue #${issue.githubNumber}:`, error);
       errors++;
 
-      // レート制限エラーの場合は長めに待機
       if (error instanceof Error && error.message?.includes("429")) {
         console.log("Rate limit hit, waiting 60 seconds...");
         await delay(60000);
@@ -293,110 +207,93 @@ async function runConsistencyEvaluation(
     }
   }
 
-  return { evaluated, errors, skipped, initialized, total };
+  return { evaluated, errors, skipped, total };
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const forceFullSync = body.forceFullSync === true;
-    const requestedRepoId = body.repoId as string | undefined;
+    const requestedRepoId = body.repoId as string | number | undefined;
 
-    const db = getAdminFirestore();
-
-    // 設定を取得
-    let repoDoc;
+    // リポジトリを取得
+    let repository;
     if (requestedRepoId) {
-      // 指定されたリポジトリを取得
-      const doc = await db.collection("repositories").doc(requestedRepoId).get();
-      if (!doc.exists) {
+      const repoId = typeof requestedRepoId === "string"
+        ? parseInt(requestedRepoId, 10)
+        : requestedRepoId;
+
+      if (isNaN(repoId)) {
+        return NextResponse.json(
+          { error: "無効なリポジトリIDです" },
+          { status: 400 }
+        );
+      }
+
+      repository = await repositoryRepo.findById(repoId);
+      if (!repository) {
         return NextResponse.json(
           { error: "指定されたリポジトリが見つかりません" },
           { status: 404 }
         );
       }
-      repoDoc = doc;
     } else {
-      // 後方互換: 最初のアクティブなリポジトリを取得
-      const repoSnapshot = await db
-        .collection("repositories")
-        .where("isActive", "==", true)
-        .limit(1)
-        .get();
-
-      if (repoSnapshot.empty) {
+      // 最初のリポジトリを取得（後方互換）
+      const allRepos = await repositoryRepo.findAll();
+      if (allRepos.length === 0) {
         return NextResponse.json(
           { error: "設定が見つかりません" },
           { status: 404 }
         );
       }
-      repoDoc = repoSnapshot.docs[0];
+      repository = allRepos[0];
     }
 
-    const repoId = repoDoc.id;
-    const configData = repoDoc.data()!;
-    const config: RepositoryConfig = {
-      id: repoId,
-      owner: configData.owner,
-      repo: configData.repo,
-      githubPat: configData.githubPat,
-      sprint: {
-        startDayOfWeek: configData.sprint?.startDayOfWeek ?? 6,
-        durationWeeks: configData.sprint?.durationWeeks ?? 1,
-        baseDate: configData.sprint?.baseDate || new Date().toISOString(),
-      },
-      trackedUsers: configData.trackedUsers || [],
-      isActive: configData.isActive ?? true,
-      createdAt: configData.createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
-      updatedAt: configData.updatedAt?.toDate?.()?.toISOString() || new Date().toISOString(),
-    };
-
-    const { owner, repo, githubPat, sprint, trackedUsers } = config;
+    const { id: repoId, ownerName: owner, repoName: repo, patEncrypted: githubPat } = repository;
 
     // SprintCalculatorを使用してスプリント情報を計算
-    const sprintCalculator = createSprintCalculator(sprint);
+    const sprintCalculator = createSprintCalculator({
+      sprintStartDayOfWeek: repository.sprintStartDayOfWeek ?? 6,
+      sprintDurationWeeks: repository.sprintDurationWeeks,
+      trackingStartDate: repository.trackingStartDate,
+    });
     const now = new Date();
     const currentSprint = sprintCalculator.getCurrentSprint(now);
     const currentSprintNumber = currentSprint.number.value;
-    const currentSprintStart = currentSprint.period.startDate;
 
     // 同期メタデータを取得
-    const syncMetaRef = db.collection("repositories").doc(repoId).collection("syncMetadata").doc("latest");
-    const syncMetaDoc = await syncMetaRef.get();
-    const syncMeta = syncMetaDoc.exists ? (syncMetaDoc.data() as SyncMetadata) : null;
-
-    const isNewSprint = !syncMeta || syncMeta.lastSyncSprintNumber !== currentSprintNumber;
-    const needsFullSync = forceFullSync || isNewSprint || !syncMeta;
+    const syncMeta = await syncMetadataRepo.findByRepositoryId(repoId);
+    const needsFullSync = forceFullSync || !syncMeta;
 
     // Octokitクライアントを作成
     const octokit = new Octokit({ auth: githubPat });
 
+    // 追跡対象ユーザーを取得
+    const trackedUserNames = await import("@/infrastructure/repositories/tracked-collaborator-repository")
+      .then((mod) => new mod.TrackedCollaboratorRepository())
+      .then((repo) => repo.findTrackedUserNamesByRepositoryId(repoId));
+
+    // コラボレーターのキャッシュ
+    const collaboratorCache = new Map<string, number>();
+
+    const getOrCreateCollaboratorId = async (username: string | null): Promise<number | null> => {
+      if (!username) return null;
+
+      if (collaboratorCache.has(username)) {
+        return collaboratorCache.get(username)!;
+      }
+
+      const collaborator = await collaboratorRepo.findOrCreate(repoId, username);
+      collaboratorCache.set(username, collaborator.id);
+      return collaborator.id;
+    };
+
     // 同期統計
     let syncedCount = 0;
-    let archivedCount = 0;
     let skippedCount = 0;
-
-    // issuesコレクションへの参照
-    const issuesRef = db.collection("repositories").doc(repoId).collection("issues");
 
     if (needsFullSync) {
       console.log(`Full sync triggered for sprint ${currentSprintNumber}`);
-
-      // 新スプリントの場合、前スプリントのclosedをアーカイブ
-      if (isNewSprint && syncMeta) {
-        const archivedSnapshot = await issuesRef
-          .where("state", "==", "closed")
-          .where("isArchived", "==", false)
-          .where("sprintNumber", "<", currentSprintNumber)
-          .get();
-
-        const archiveBatch = db.batch();
-        archivedSnapshot.docs.forEach((doc) => {
-          archiveBatch.update(doc.ref, { isArchived: true, updatedAt: new Date().toISOString() });
-          archivedCount++;
-        });
-        await archiveBatch.commit();
-      }
 
       // GitHubから全Issue取得
       let page = 1;
@@ -413,13 +310,11 @@ export async function POST(request: NextRequest) {
 
         if (issues.length === 0) break;
 
-        const batch = db.batch();
-
         for (const issue of issues) {
           if (issue.pull_request) continue;
 
           const creator = issue.user?.login || "unknown";
-          if (trackedUsers.length > 0 && !trackedUsers.includes(creator)) {
+          if (trackedUserNames.length > 0 && !trackedUserNames.includes(creator)) {
             skippedCount++;
             continue;
           }
@@ -427,18 +322,25 @@ export async function POST(request: NextRequest) {
           const issueDate = new Date(issue.created_at);
           const issueSprintNumber = sprintCalculator.calculateIssueSprintNumber(issueDate).value;
 
-          // 過去スプリントのclosedはアーカイブ済みとして保存
-          const isArchived = issueSprintNumber < currentSprintNumber && issue.state === "closed";
+          const assigneeId = await getOrCreateCollaboratorId(issue.assignee?.login || null);
+          const authorId = await getOrCreateCollaboratorId(creator);
 
-          const storedIssue = convertToStoredIssue(issue, issueSprintNumber);
-          storedIssue.isArchived = isArchived;
+          const issueData: NewIssue = {
+            repositoryId: repoId,
+            githubNumber: issue.number,
+            title: issue.title,
+            body: issue.body || null,
+            state: issue.state as "open" | "closed",
+            authorCollaboratorId: authorId,
+            assigneeCollaboratorId: assigneeId,
+            sprintNumber: issueSprintNumber,
+            githubCreatedAt: new Date(issue.created_at),
+            githubClosedAt: issue.closed_at ? new Date(issue.closed_at) : null,
+          };
 
-          const issueDocRef = issuesRef.doc(issue.number.toString());
-          batch.set(issueDocRef, storedIssue, { merge: true });
+          await issueRepo.upsert(issueData);
           syncedCount++;
         }
-
-        await batch.commit();
 
         if (issues.length < perPage) break;
         page++;
@@ -446,16 +348,9 @@ export async function POST(request: NextRequest) {
     } else {
       console.log(`Incremental sync for sprint ${currentSprintNumber}`);
 
-      // 差分同期: アーカイブされていないIssueのみ更新
-      const nonArchivedSnapshot = await issuesRef.where("isArchived", "==", false).get();
-      const existingIssueNumbers = new Set(
-        nonArchivedSnapshot.docs.map((doc) => parseInt(doc.id, 10))
-      );
-
-      // GitHubからopen Issueを取得
+      // 差分同期
       let page = 1;
       const perPage = 100;
-      const processedNumbers = new Set<number>();
 
       while (true) {
         const { data: issues } = await octokit.rest.issues.listForRepo({
@@ -464,18 +359,16 @@ export async function POST(request: NextRequest) {
           state: "all",
           per_page: perPage,
           page,
-          since: syncMeta?.lastSyncAt,
+          since: syncMeta?.lastSyncAt?.toISOString(),
         });
 
         if (issues.length === 0) break;
-
-        const batch = db.batch();
 
         for (const issue of issues) {
           if (issue.pull_request) continue;
 
           const creator = issue.user?.login || "unknown";
-          if (trackedUsers.length > 0 && !trackedUsers.includes(creator)) {
+          if (trackedUserNames.length > 0 && !trackedUserNames.includes(creator)) {
             skippedCount++;
             continue;
           }
@@ -483,27 +376,25 @@ export async function POST(request: NextRequest) {
           const issueDate = new Date(issue.created_at);
           const issueSprintNumber = sprintCalculator.calculateIssueSprintNumber(issueDate).value;
 
-          // 過去スプリントのclosedはスキップ（既にアーカイブ済みのはず）
-          if (issueSprintNumber < currentSprintNumber && issue.state === "closed") {
-            if (!existingIssueNumbers.has(issue.number)) {
-              // 新規の過去closedはアーカイブとして保存
-              const storedIssue = convertToStoredIssue(issue, issueSprintNumber);
-              storedIssue.isArchived = true;
-              const issueDocRef = issuesRef.doc(issue.number.toString());
-              batch.set(issueDocRef, storedIssue, { merge: true });
-              syncedCount++;
-            }
-            continue;
-          }
+          const assigneeId = await getOrCreateCollaboratorId(issue.assignee?.login || null);
+          const authorId = await getOrCreateCollaboratorId(creator);
 
-          const storedIssue = convertToStoredIssue(issue, issueSprintNumber);
-          const issueDocRef = issuesRef.doc(issue.number.toString());
-          batch.set(issueDocRef, storedIssue, { merge: true });
-          processedNumbers.add(issue.number);
+          const issueData: NewIssue = {
+            repositoryId: repoId,
+            githubNumber: issue.number,
+            title: issue.title,
+            body: issue.body || null,
+            state: issue.state as "open" | "closed",
+            authorCollaboratorId: authorId,
+            assigneeCollaboratorId: assigneeId,
+            sprintNumber: issueSprintNumber,
+            githubCreatedAt: new Date(issue.created_at),
+            githubClosedAt: issue.closed_at ? new Date(issue.closed_at) : null,
+          };
+
+          await issueRepo.upsert(issueData);
           syncedCount++;
         }
-
-        await batch.commit();
 
         if (issues.length < perPage) break;
         page++;
@@ -511,28 +402,22 @@ export async function POST(request: NextRequest) {
     }
 
     // 同期メタデータを更新
-    await syncMetaRef.set({
-      lastSyncAt: new Date().toISOString(),
-      lastSyncSprintNumber: currentSprintNumber,
-      lastSyncSprintStart: currentSprintStart.toISOString(),
-    });
+    await syncMetadataRepo.upsert(repoId, new Date());
 
     // 品質評価を実行（GEMINI_API_KEYが設定されている場合のみ）
-    let qualityEvaluationStats = { evaluated: 0, errors: 0, initialized: 0, total: 0 };
-    let consistencyEvaluationStats = { evaluated: 0, errors: 0, skipped: 0, initialized: 0, total: 0 };
+    let qualityEvaluationStats = { evaluated: 0, errors: 0, total: 0 };
+    let consistencyEvaluationStats = { evaluated: 0, errors: 0, skipped: 0, total: 0 };
 
     if (process.env.GEMINI_API_KEY) {
       try {
-        // 全ての未評価Issueを品質評価（制限なし、1秒間隔）
-        qualityEvaluationStats = await runQualityEvaluation(issuesRef, { delayMs: 1000 });
+        qualityEvaluationStats = await runQualityEvaluation(repoId, { delayMs: 1000 });
       } catch (error) {
         console.error("Quality evaluation error:", error);
       }
 
       try {
-        // 全ての未評価クローズ済みIssueをPR整合性評価（制限なし、2秒間隔）
         consistencyEvaluationStats = await runConsistencyEvaluation(
-          issuesRef,
+          repoId,
           octokit,
           owner,
           repo,
@@ -551,14 +436,11 @@ export async function POST(request: NextRequest) {
       currentSprintNumber,
       stats: {
         synced: syncedCount,
-        archived: archivedCount,
         skipped: skippedCount,
         qualityTotal: qualityEvaluationStats.total,
-        qualityInitialized: qualityEvaluationStats.initialized,
         qualityEvaluated: qualityEvaluationStats.evaluated,
         qualityErrors: qualityEvaluationStats.errors,
         consistencyTotal: consistencyEvaluationStats.total,
-        consistencyInitialized: consistencyEvaluationStats.initialized,
         consistencyEvaluated: consistencyEvaluationStats.evaluated,
         consistencySkipped: consistencyEvaluationStats.skipped,
         consistencyErrors: consistencyEvaluationStats.errors,
@@ -579,47 +461,35 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const requestedRepoId = searchParams.get("repoId");
 
-    const db = getAdminFirestore();
-
-    let repoDoc;
+    let repository;
     if (requestedRepoId) {
-      const doc = await db.collection("repositories").doc(requestedRepoId).get();
-      if (!doc.exists) {
+      const repoId = parseInt(requestedRepoId, 10);
+      if (isNaN(repoId)) {
+        return NextResponse.json({ needsSync: true, reason: "invalid_repo_id" });
+      }
+      repository = await repositoryRepo.findById(repoId);
+      if (!repository) {
         return NextResponse.json({ needsSync: true, reason: "repo_not_found" });
       }
-      repoDoc = doc;
     } else {
-      const repoSnapshot = await db
-        .collection("repositories")
-        .where("isActive", "==", true)
-        .limit(1)
-        .get();
-
-      if (repoSnapshot.empty) {
+      const allRepos = await repositoryRepo.findAll();
+      if (allRepos.length === 0) {
         return NextResponse.json({ needsSync: true, reason: "no_config" });
       }
-      repoDoc = repoSnapshot.docs[0];
+      repository = allRepos[0];
     }
 
-    const repoId = repoDoc.id;
-    const configData = repoDoc.data()!;
-
-    const sprint = {
-      startDayOfWeek: configData.sprint?.startDayOfWeek ?? 6,
-      durationWeeks: configData.sprint?.durationWeeks ?? 1,
-      baseDate: configData.sprint?.baseDate || new Date().toISOString(),
-    };
-
-    // SprintCalculatorを使用してスプリント番号を計算
-    const sprintCalculator = createSprintCalculator(sprint);
+    const sprintCalculator = createSprintCalculator({
+      sprintStartDayOfWeek: repository.sprintStartDayOfWeek ?? 6,
+      sprintDurationWeeks: repository.sprintDurationWeeks,
+      trackingStartDate: repository.trackingStartDate,
+    });
     const now = new Date();
     const currentSprintNumber = sprintCalculator.calculateSprintNumber(now).value;
 
-    // 同期メタデータを取得
-    const syncMetaRef = db.collection("repositories").doc(repoId).collection("syncMetadata").doc("latest");
-    const syncMetaDoc = await syncMetaRef.get();
+    const syncMeta = await syncMetadataRepo.findByRepositoryId(repository.id);
 
-    if (!syncMetaDoc.exists) {
+    if (!syncMeta) {
       return NextResponse.json({
         needsSync: true,
         reason: "never_synced",
@@ -627,14 +497,13 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const syncMeta = syncMetaDoc.data() as SyncMetadata;
-    const isNewSprint = syncMeta.lastSyncSprintNumber !== currentSprintNumber;
-
     return NextResponse.json({
-      needsSync: isNewSprint,
-      reason: isNewSprint ? "new_sprint" : "up_to_date",
+      needsSync: false,
+      reason: "up_to_date",
       currentSprintNumber,
-      lastSync: syncMeta,
+      lastSync: {
+        lastSyncAt: syncMeta.lastSyncAt.toISOString(),
+      },
     });
   } catch (error) {
     console.error("Sync status check error:", error);

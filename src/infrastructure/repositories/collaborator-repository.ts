@@ -95,4 +95,18 @@ export class CollaboratorRepository {
       .where(eq(collaborators.repositoryId, repositoryId));
     return result.rowCount ?? 0;
   }
+
+  /**
+   * コラボレーターを取得または作成する
+   */
+  async findOrCreate(
+    repositoryId: number,
+    githubUserName: string
+  ): Promise<Collaborator> {
+    const existing = await this.findByRepositoryAndGithubUser(repositoryId, githubUserName);
+    if (existing) {
+      return existing;
+    }
+    return this.create({ repositoryId, githubUserName });
+  }
 }

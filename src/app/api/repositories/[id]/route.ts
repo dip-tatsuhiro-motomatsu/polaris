@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminFirestore } from "@/lib/firebase/admin";
-import type { Repository } from "@/types/repository";
+import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
+import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
+import { SyncMetadataRepository } from "@/infrastructure/repositories/sync-metadata-repository";
 
 export const dynamic = "force-dynamic";
 
 type Params = {
   params: Promise<{ id: string }>;
 };
+
+const repositoryRepo = new RepositoryRepository();
+const issueRepo = new IssueRepository();
+const syncMetadataRepo = new SyncMetadataRepository();
 
 /**
  * GET /api/repositories/[id]
@@ -15,31 +20,42 @@ type Params = {
 export async function GET(request: NextRequest, { params }: Params) {
   try {
     const { id } = await params;
-    const db = getAdminFirestore();
-    const doc = await db.collection("repositories").doc(id).get();
+    const repositoryId = parseInt(id, 10);
 
-    if (!doc.exists) {
+    if (isNaN(repositoryId)) {
+      return NextResponse.json(
+        { error: "無効なリポジトリIDです", message: "Invalid repository ID" },
+        { status: 400 }
+      );
+    }
+
+    const repository = await repositoryRepo.findById(repositoryId);
+
+    if (!repository) {
       return NextResponse.json(
         { error: "リポジトリが見つかりません", message: "Repository not found" },
         { status: 404 }
       );
     }
 
-    const data = doc.data()!;
-    const repository: Repository = {
-      id: doc.id,
-      owner: data.owner,
-      name: data.name,
-      url: data.url,
-      githubId: data.githubId,
-      lastSyncedAt: data.lastSyncedAt?.toDate() || null,
-      issueCount: data.issueCount || 0,
-      prCount: data.prCount || 0,
-      createdAt: data.createdAt.toDate(),
-      updatedAt: data.updatedAt.toDate(),
-    };
+    // Issue数を取得
+    const issues = await issueRepo.findByRepositoryId(repositoryId);
+    const issueCount = issues.length;
 
-    return NextResponse.json(repository);
+    // 最終同期日時を取得
+    const syncMeta = await syncMetadataRepo.findByRepositoryId(repositoryId);
+
+    return NextResponse.json({
+      id: repository.id,
+      owner: repository.ownerName,
+      name: repository.repoName,
+      url: `https://github.com/${repository.ownerName}/${repository.repoName}`,
+      lastSyncedAt: syncMeta?.lastSyncAt || null,
+      issueCount,
+      prCount: 0, // TODO: PR数を取得
+      createdAt: repository.createdAt,
+      updatedAt: repository.updatedAt,
+    });
   } catch (error) {
     console.error("Error fetching repository:", error);
     return NextResponse.json(
@@ -51,37 +67,31 @@ export async function GET(request: NextRequest, { params }: Params) {
 
 /**
  * DELETE /api/repositories/[id]
- * リポジトリを削除
+ * リポジトリを削除（カスケード削除によりissues等も削除される）
  */
 export async function DELETE(request: NextRequest, { params }: Params) {
   try {
     const { id } = await params;
-    const db = getAdminFirestore();
-    const docRef = db.collection("repositories").doc(id);
-    const doc = await docRef.get();
+    const repositoryId = parseInt(id, 10);
 
-    if (!doc.exists) {
+    if (isNaN(repositoryId)) {
+      return NextResponse.json(
+        { error: "無効なリポジトリIDです", message: "Invalid repository ID" },
+        { status: 400 }
+      );
+    }
+
+    const repository = await repositoryRepo.findById(repositoryId);
+
+    if (!repository) {
       return NextResponse.json(
         { error: "リポジトリが見つかりません", message: "Repository not found" },
         { status: 404 }
       );
     }
 
-    // サブコレクション（issues, pullRequests）も削除
-    const batch = db.batch();
-
-    // Issues削除
-    const issuesSnapshot = await docRef.collection("issues").get();
-    issuesSnapshot.docs.forEach((doc) => batch.delete(doc.ref));
-
-    // Pull Requests削除
-    const prsSnapshot = await docRef.collection("pullRequests").get();
-    prsSnapshot.docs.forEach((doc) => batch.delete(doc.ref));
-
-    // リポジトリ本体削除
-    batch.delete(docRef);
-
-    await batch.commit();
+    // カスケード削除（DBレベルで設定済み）
+    await repositoryRepo.delete(repositoryId);
 
     return new NextResponse(null, { status: 204 });
   } catch (error) {

@@ -1,19 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// モック用の関数定義
-const mockGetAdminFirestore = vi.fn();
-const mockCollection = vi.fn();
-const mockDoc = vi.fn();
-const mockGet = vi.fn();
-const mockSet = vi.fn();
-const mockDelete = vi.fn();
-const mockWhere = vi.fn();
-const mockGetDocs = vi.fn();
-
-vi.mock("@/lib/firebase/admin", () => ({
-  getAdminFirestore: () => mockGetAdminFirestore(),
-}));
-
 // テスト用のヘルパー関数
 function parseGitHubUrl(url: string): { owner: string; repo: string } | null {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
