@@ -111,17 +111,17 @@
 
 ### テスト（US3）
 
-- [ ] T037 [P] [US3] AI抽象化インターフェースのユニットテストを作成 in tests/unit/lib/ai/interface.test.ts
-- [ ] T038 [P] [US3] 品質評価ロジックのユニットテストを作成（モック使用）in tests/unit/evaluation/quality.test.ts
+- [x] T037 [P] [US3] AI抽象化インターフェースのユニットテストを作成 in tests/unit/lib/ai/interface.test.ts
+- [x] T038 [P] [US3] 品質評価ロジックのユニットテストを作成（モック使用）in tests/unit/evaluation/quality.test.ts
 
 ### 実装（US3）
 
-- [ ] T039 [US3] AI抽象化インターフェースを定義 in src/lib/ai/interface.ts
-- [ ] T040 [US3] OpenAI実装を作成 in src/lib/ai/openai.ts
-- [ ] T041 [US3] Issue評価ロジックを実装（プロンプト設計含む）in src/lib/ai/evaluator.ts
-- [ ] T042 [US3] 品質評価APIを実装 in src/app/api/evaluations/quality/route.ts
-- [ ] T043 [US3] 品質評価結果の表示をIssueテーブルに追加 in src/components/dashboard/IssueTable.tsx
-- [ ] T044 [US3] 品質評価フィードバック詳細モーダルを作成 in src/components/dashboard/QualityFeedbackModal.tsx
+- [x] T039 [US3] AI抽象化インターフェースを定義 in src/lib/ai/interface.ts
+- [x] T040 [US3] OpenAI実装を作成 in src/lib/ai/openai.ts
+- [x] T041 [US3] Issue評価ロジックを実装（プロンプト設計含む）in src/lib/ai/evaluator.ts
+- [x] T042 [US3] 品質評価APIを実装 in src/app/api/evaluations/quality/route.ts
+- [x] T043 [US3] 品質評価結果の表示をIssueテーブルに追加 in src/components/dashboard/IssueTable.tsx
+- [x] T044 [US3] 品質評価フィードバック詳細モーダルを作成 in src/components/dashboard/QualityFeedbackModal.tsx
 
 **チェックポイント**: Issue一覧でAI品質評価とフィードバックが表示
 
@@ -135,12 +135,12 @@
 
 ### テスト（US4）
 
-- [ ] T045 [P] [US4] 整合性評価ロジックのユニットテストを作成 in tests/unit/evaluation/consistency.test.ts
+- [x] T045 [P] [US4] 整合性評価ロジックのユニットテストを作成 in tests/unit/api/evaluations-consistency.test.ts
 
 ### 実装（US4）
 
-- [ ] T046 [US4] 整合性評価ロジックを実装（AI使用）in src/lib/evaluation/consistency.ts
-- [ ] T047 [US4] 整合性評価APIを実装 in src/app/api/evaluations/consistency/route.ts
+- [x] T046 [US4] 整合性評価ロジックを実装（AI使用）in src/lib/evaluation/consistency.ts
+- [x] T047 [US4] 整合性評価APIを実装 in src/app/api/evaluations/consistency/route.ts
 - [ ] T048 [US4] PRテーブルコンポーネントを作成 in src/components/dashboard/PullRequestTable.tsx
 - [ ] T049 [US4] PR一覧ページを実装 in src/app/repositories/[id]/pull-requests/page.tsx
 - [ ] T050 [US4] 整合性評価結果の表示を追加 in src/components/dashboard/ConsistencyBadge.tsx
