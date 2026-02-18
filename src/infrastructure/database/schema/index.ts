@@ -12,6 +12,7 @@ export {
   evaluations,
   type Evaluation,
   type NewEvaluation,
+  type CategoryEvaluation,
   type QualityDetails,
   type ConsistencyDetails,
 } from "./evaluations";
