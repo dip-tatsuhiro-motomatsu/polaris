@@ -1,4 +1,4 @@
-import { pgTable, bigserial, bigint, integer, timestamp, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, bigserial, bigint, integer, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { issues } from "./issues";
 
 /**
@@ -18,12 +18,14 @@ export const evaluations = pgTable("evaluations", {
 
   // Issue品質評価
   qualityScore: integer("quality_score"),
-  qualityDetails: jsonb("quality_details"),
+  qualityGrade: text("quality_grade"), // A, B, C, D, E
+  qualityDetails: jsonb("quality_details").$type<QualityDetails>(),
   qualityCalculatedAt: timestamp("quality_calculated_at", { withTimezone: true }),
 
   // 整合性評価
   consistencyScore: integer("consistency_score"),
-  consistencyDetails: jsonb("consistency_details"),
+  consistencyGrade: text("consistency_grade"), // A, B, C, D, E
+  consistencyDetails: jsonb("consistency_details").$type<ConsistencyDetails>(),
   consistencyCalculatedAt: timestamp("consistency_calculated_at", { withTimezone: true }),
 
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -31,28 +33,37 @@ export const evaluations = pgTable("evaluations", {
 });
 
 /**
+ * カテゴリ別評価結果
+ */
+export interface CategoryEvaluation {
+  categoryId: string;
+  categoryName: string;
+  score: number;
+  maxScore: number;
+  feedback: string;
+}
+
+/**
  * 品質評価詳細の型定義
  */
 export interface QualityDetails {
-  userStoryScore: number;
-  userStoryFeedback: string;
-  implementationPlanScore: number;
-  implementationPlanFeedback: string;
-  concernsScore: number;
-  concernsFeedback: string;
-  assigneeScore: number;
-  assigneeFeedback: string;
+  categories: CategoryEvaluation[];
+  overallFeedback: string;
+  improvementSuggestions: string[];
 }
 
 /**
  * 整合性評価詳細の型定義
  */
 export interface ConsistencyDetails {
-  summary: string;
-  deductions: Array<{
-    reason: string;
-    points: number;
+  linkedPRs: Array<{
+    number: number;
+    title: string;
+    url: string;
   }>;
+  categories: CategoryEvaluation[];
+  overallFeedback: string;
+  issueImprovementSuggestions: string[];
 }
 
 export type Evaluation = typeof evaluations.$inferSelect;

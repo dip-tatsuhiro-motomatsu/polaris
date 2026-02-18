@@ -29,6 +29,13 @@
       "when": 1771377501724,
       "tag": "0003_hot_clea",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1771381873730,
+      "tag": "0004_lush_magik",
+      "breakpoints": true
     }
   ]
 }
