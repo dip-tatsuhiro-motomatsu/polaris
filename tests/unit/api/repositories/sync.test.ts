@@ -39,6 +39,7 @@ describe("POST /api/repositories/[id]/sync", () => {
     state: "open",
     authorCollaboratorId: null,
     assigneeCollaboratorId: null,
+    sprintNumber: 1,
     githubCreatedAt: new Date("2024-01-15"),
     githubClosedAt: null,
     createdAt: new Date(),

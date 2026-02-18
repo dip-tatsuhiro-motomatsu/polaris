@@ -1,39 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminFirestore } from "@/lib/firebase/admin";
+import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
 import type { RepositoryConfig, SyncMetadata, StoredIssue } from "@/types/settings";
 
 export const dynamic = "force-dynamic";
 
-// スプリント開始日を計算
-function getSprintStartDate(date: Date, startDayOfWeek: number): Date {
-  const d = new Date(date);
-  const dayOfWeek = d.getDay();
-  const diff = (dayOfWeek - startDayOfWeek + 7) % 7;
-  d.setDate(d.getDate() - diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-// スプリント終了日を計算
-function getSprintEndDate(startDate: Date, durationWeeks: number): Date {
-  const endDate = new Date(startDate);
-  endDate.setDate(endDate.getDate() + durationWeeks * 7 - 1);
-  endDate.setHours(23, 59, 59, 999);
-  return endDate;
-}
-
-// スプリント番号を計算
-function getSprintNumber(
-  date: Date,
-  baseSprint: Date,
-  durationWeeks: number,
-  startDayOfWeek: number
-): number {
-  const sprintStart = getSprintStartDate(date, startDayOfWeek);
-  const diffDays = Math.floor(
-    (sprintStart.getTime() - baseSprint.getTime()) / (1000 * 60 * 60 * 24)
-  );
-  return Math.floor(diffDays / (durationWeeks * 7)) + 1;
+// SprintCalculatorのファクトリ関数
+function createSprintCalculator(sprint: RepositoryConfig["sprint"]): SprintCalculator {
+  const config: SprintConfig = {
+    startDayOfWeek: sprint.startDayOfWeek,
+    durationWeeks: sprint.durationWeeks,
+    baseDate: new Date(sprint.baseDate),
+  };
+  return new SprintCalculator(config);
 }
 
 // 曜日名
@@ -125,18 +104,17 @@ export async function GET(request: NextRequest) {
 
     const { owner, repo, sprint, trackedUsers } = config;
 
-    // スプリント計算
+    // SprintCalculatorを使用してスプリント情報を計算
+    const sprintCalculator = createSprintCalculator(sprint);
     const now = new Date();
-    const baseDate = new Date(sprint.baseDate);
-    const baseSprint = getSprintStartDate(baseDate, sprint.startDayOfWeek);
-    const currentSprintStart = getSprintStartDate(now, sprint.startDayOfWeek);
-    const currentSprintNumber = getSprintNumber(now, baseSprint, sprint.durationWeeks, sprint.startDayOfWeek);
+    const currentSprint = sprintCalculator.getCurrentSprint(now);
+    const currentSprintNumber = currentSprint.number.value;
 
-    // オフセットを適用したスプリント
-    const targetSprintStart = new Date(currentSprintStart);
-    targetSprintStart.setDate(targetSprintStart.getDate() + sprintOffset * sprint.durationWeeks * 7);
-    const targetSprintEnd = getSprintEndDate(targetSprintStart, sprint.durationWeeks);
-    const targetSprintNumber = currentSprintNumber + sprintOffset;
+    // オフセットを適用したスプリントを取得
+    const targetSprint = sprintCalculator.getSprintWithOffset(now, sprintOffset);
+    const targetSprintStart = targetSprint.period.startDate;
+    const targetSprintEnd = targetSprint.period.endDate;
+    const targetSprintNumber = targetSprint.number.value;
 
     const isCurrent = sprintOffset === 0;
 
@@ -322,10 +300,8 @@ export async function GET(request: NextRequest) {
       },
     };
 
-    // スプリント期間のフォーマット
-    const formatDate = (d: Date) =>
-      `${d.getMonth() + 1}/${d.getDate()}(${DAY_NAMES[d.getDay()]})`;
-    const period = `${formatDate(targetSprintStart)} - ${formatDate(targetSprintEnd)}`;
+    // スプリント期間のフォーマット（SprintPeriodのformat()を使用）
+    const period = targetSprint.period.format();
 
     return NextResponse.json({
       sprint: {

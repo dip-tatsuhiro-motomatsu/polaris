@@ -64,6 +64,7 @@ describe("IssueRepository", () => {
     state: "open",
     authorCollaboratorId: 1,
     assigneeCollaboratorId: null,
+    sprintNumber: 1,
     githubCreatedAt: new Date("2024-01-01"),
     githubClosedAt: null,
     createdAt: new Date("2024-01-01"),

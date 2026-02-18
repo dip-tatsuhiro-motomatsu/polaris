@@ -21,6 +21,7 @@ export const issues = pgTable(
       .references(() => collaborators.id, { onDelete: "set null" }),
     assigneeCollaboratorId: bigint("assignee_collaborator_id", { mode: "number" })
       .references(() => collaborators.id, { onDelete: "set null" }),
+    sprintNumber: integer("sprint_number"), // スプリント番号（Issue作成日から計算）
     githubCreatedAt: timestamp("github_created_at", { withTimezone: true }).notNull(),
     githubClosedAt: timestamp("github_closed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
