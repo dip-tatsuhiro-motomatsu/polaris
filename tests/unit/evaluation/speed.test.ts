@@ -55,28 +55,18 @@ describe("Speed Evaluation", () => {
   });
 
   describe("evaluateSpeed", () => {
-    it("24時間以内の完了はS評価（120点）", () => {
+    it("2日以内（48時間以内）の完了はA評価（100点）", () => {
       const createdAt = new Date("2024-01-01T00:00:00Z");
       const closedAt = new Date("2024-01-01T23:00:00Z"); // 23時間
 
       const result = evaluateSpeed(createdAt, closedAt);
 
-      expect(result.grade).toBe("S");
-      expect(result.score).toBe(120);
-      expect(result.message).toContain("小さな単位で開発できています");
+      expect(result.grade).toBe("A");
+      expect(result.score).toBe(100);
+      expect(result.message).toContain("迅速な対応");
     });
 
-    it("24時間ちょうどはS評価", () => {
-      const createdAt = new Date("2024-01-01T00:00:00Z");
-      const closedAt = new Date("2024-01-02T00:00:00Z"); // 24時間
-
-      const result = evaluateSpeed(createdAt, closedAt);
-
-      expect(result.grade).toBe("S");
-      expect(result.score).toBe(120);
-    });
-
-    it("72時間以内（24時間超）の完了はA評価（100点）", () => {
+    it("2日ちょうど（48時間）はA評価", () => {
       const createdAt = new Date("2024-01-01T00:00:00Z");
       const closedAt = new Date("2024-01-03T00:00:00Z"); // 48時間
 
@@ -84,29 +74,50 @@ describe("Speed Evaluation", () => {
 
       expect(result.grade).toBe("A");
       expect(result.score).toBe(100);
-      expect(result.message).toContain("非常に健全な開発スピード");
     });
 
-    it("120時間以内（72時間超）の完了はB評価（70点）", () => {
+    it("3日以内（72時間以内、48時間超）の完了はB評価（80点）", () => {
       const createdAt = new Date("2024-01-01T00:00:00Z");
-      const closedAt = new Date("2024-01-05T00:00:00Z"); // 96時間
+      const closedAt = new Date("2024-01-03T12:00:00Z"); // 60時間
 
       const result = evaluateSpeed(createdAt, closedAt);
 
       expect(result.grade).toBe("B");
-      expect(result.score).toBe(70);
+      expect(result.score).toBe(80);
+      expect(result.message).toContain("良好なペース");
+    });
+
+    it("4日以内（96時間以内、72時間超）の完了はC評価（60点）", () => {
+      const createdAt = new Date("2024-01-01T00:00:00Z");
+      const closedAt = new Date("2024-01-04T12:00:00Z"); // 84時間
+
+      const result = evaluateSpeed(createdAt, closedAt);
+
+      expect(result.grade).toBe("C");
+      expect(result.score).toBe(60);
+      expect(result.message).toContain("標準的なペース");
+    });
+
+    it("5日以内（120時間以内、96時間超）の完了はD評価（40点）", () => {
+      const createdAt = new Date("2024-01-01T00:00:00Z");
+      const closedAt = new Date("2024-01-05T12:00:00Z"); // 108時間
+
+      const result = evaluateSpeed(createdAt, closedAt);
+
+      expect(result.grade).toBe("D");
+      expect(result.score).toBe(40);
       expect(result.message).toContain("タスクが肥大化");
     });
 
-    it("120時間超の完了はC評価（40点）", () => {
+    it("5日超（120時間超）の完了はE評価（20点）", () => {
       const createdAt = new Date("2024-01-01T00:00:00Z");
       const closedAt = new Date("2024-01-10T00:00:00Z"); // 216時間
 
       const result = evaluateSpeed(createdAt, closedAt);
 
-      expect(result.grade).toBe("C");
-      expect(result.score).toBe(40);
-      expect(result.message).toContain("何か詰まっているはず");
+      expect(result.grade).toBe("E");
+      expect(result.score).toBe(20);
+      expect(result.message).toContain("詰まっているはず");
     });
 
     it("詳細に完了時間が含まれる", () => {
@@ -121,8 +132,8 @@ describe("Speed Evaluation", () => {
   });
 
   describe("SPEED_CRITERIA configuration", () => {
-    it("設定ファイルに4つの評価基準がある", () => {
-      expect(SPEED_CRITERIA.length).toBe(4);
+    it("設定ファイルに5つの評価基準がある", () => {
+      expect(SPEED_CRITERIA.length).toBe(5);
     });
 
     it("基準が時間順にソートされている", () => {
@@ -143,24 +154,29 @@ describe("Speed Evaluation", () => {
   });
 
   describe("scoreToGrade helper", () => {
-    it("101点以上はS", () => {
-      expect(scoreToGrade(120)).toBe("S");
-      expect(scoreToGrade(101)).toBe("S");
-    });
-
-    it("71-100点はA", () => {
+    it("81点以上はA", () => {
       expect(scoreToGrade(100)).toBe("A");
-      expect(scoreToGrade(71)).toBe("A");
+      expect(scoreToGrade(81)).toBe("A");
     });
 
-    it("41-70点はB", () => {
-      expect(scoreToGrade(70)).toBe("B");
-      expect(scoreToGrade(41)).toBe("B");
+    it("61-80点はB", () => {
+      expect(scoreToGrade(80)).toBe("B");
+      expect(scoreToGrade(61)).toBe("B");
     });
 
-    it("40点以下はC", () => {
-      expect(scoreToGrade(40)).toBe("C");
-      expect(scoreToGrade(0)).toBe("C");
+    it("41-60点はC", () => {
+      expect(scoreToGrade(60)).toBe("C");
+      expect(scoreToGrade(41)).toBe("C");
+    });
+
+    it("21-40点はD", () => {
+      expect(scoreToGrade(40)).toBe("D");
+      expect(scoreToGrade(21)).toBe("D");
+    });
+
+    it("20点以下はE", () => {
+      expect(scoreToGrade(20)).toBe("E");
+      expect(scoreToGrade(0)).toBe("E");
     });
   });
 });

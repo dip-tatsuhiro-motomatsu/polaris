@@ -1,5 +1,5 @@
-// 速度評価用グレード
-export type Grade = "S" | "A" | "B" | "C";
+// 速度評価用グレード（A-Eの5段階）
+export type Grade = "A" | "B" | "C" | "D" | "E";
 
 // 品質評価用グレード
 export type QualityGrade = "A" | "B" | "C" | "D" | "E";
@@ -63,10 +63,11 @@ export interface ConsistencyEvaluationDetail {
 }
 
 export interface GradeDistribution {
-  S: number;
   A: number;
   B: number;
   C: number;
+  D: number;
+  E: number;
 }
 
 export interface TeamSummary {

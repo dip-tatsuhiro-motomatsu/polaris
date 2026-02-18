@@ -88,16 +88,19 @@ export default async function Home() {
           <CardContent>
             <div className="space-y-2 text-sm">
               <p>
-                <span className="font-semibold">S (100点)</span>: 24時間以内完了
+                <span className="font-semibold">A (100点)</span>: 2日以内完了
               </p>
               <p>
-                <span className="font-semibold">A (80点)</span>: 72時間以内完了
+                <span className="font-semibold">B (80点)</span>: 3日以内完了
               </p>
               <p>
-                <span className="font-semibold">B (60点)</span>: 168時間以内完了
+                <span className="font-semibold">C (60点)</span>: 4日以内完了
               </p>
               <p>
-                <span className="font-semibold">C (40点)</span>: 168時間超
+                <span className="font-semibold">D (40点)</span>: 5日以内完了
+              </p>
+              <p>
+                <span className="font-semibold">E (20点)</span>: 5日超
               </p>
             </div>
           </CardContent>

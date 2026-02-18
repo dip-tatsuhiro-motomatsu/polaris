@@ -7,6 +7,7 @@ export { Score, type Grade } from "./Score";
 
 // リードタイム評価
 export { LeadTimeScore } from "./LeadTimeScore";
+export { LeadTimeGrade, type LeadTimeGradeValue } from "./LeadTimeGrade";
 
 // Issue品質評価（既存パターン）
 export {

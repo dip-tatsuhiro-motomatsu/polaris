@@ -37,12 +37,14 @@ const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
 const formatDate = (d: Date) =>
   `${d.getMonth() + 1}/${d.getDate()}(${DAY_NAMES[d.getDay()]})`;
 
-// リードタイム評価のグレードを計算
+// リードタイム評価のグレードを計算（A-E、日数ベース）
 function calculateLeadTimeGrade(hours: number): { grade: string; score: number } {
-  if (hours <= 24) return { grade: "S", score: 100 };
-  if (hours <= 72) return { grade: "A", score: 80 };
-  if (hours <= 168) return { grade: "B", score: 60 };
-  return { grade: "C", score: 40 };
+  const days = hours / 24;
+  if (days <= 2) return { grade: "A", score: 100 };
+  if (days <= 3) return { grade: "B", score: 80 };
+  if (days <= 4) return { grade: "C", score: 60 };
+  if (days <= 5) return { grade: "D", score: 40 };
+  return { grade: "E", score: 20 };
 }
 
 // スプリント統計の型
@@ -56,7 +58,7 @@ interface SprintStats {
     closedIssues: number;
     averageScore: number | null;
     averageHours: number | null;
-    gradeDistribution: { S: number; A: number; B: number; C: number };
+    gradeDistribution: { A: number; B: number; C: number; D: number; E: number };
     evaluatedIssues: number;
     averageQualityScore: number | null;
     qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
@@ -70,7 +72,7 @@ interface SprintStats {
     closedIssues: number;
     averageScore: number | null;
     averageHours: number | null;
-    gradeDistribution: { S: number; A: number; B: number; C: number };
+    gradeDistribution: { A: number; B: number; C: number; D: number; E: number };
     averageQualityScore: number | null;
     qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
     averageConsistencyScore: number | null;
@@ -236,10 +238,11 @@ export async function GET(request: NextRequest) {
           ? Math.round((closedIssues.reduce((sum, i) => sum + (i.completionHours || 0), 0) / closedIssues.length) * 10) / 10
           : null,
         gradeDistribution: {
-          S: closedIssues.filter((i) => i.grade === "S").length,
           A: closedIssues.filter((i) => i.grade === "A").length,
           B: closedIssues.filter((i) => i.grade === "B").length,
           C: closedIssues.filter((i) => i.grade === "C").length,
+          D: closedIssues.filter((i) => i.grade === "D").length,
+          E: closedIssues.filter((i) => i.grade === "E").length,
         },
         evaluatedIssues: evaluatedIssues.length,
         averageQualityScore: evaluatedIssues.length > 0
@@ -272,7 +275,7 @@ export async function GET(request: NextRequest) {
         closedIssues: number;
         scores: number[];
         hours: number[];
-        gradeDistribution: { S: number; A: number; B: number; C: number };
+        gradeDistribution: { A: number; B: number; C: number; D: number; E: number };
         qualityScores: number[];
         qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
         consistencyScores: number[];
@@ -287,7 +290,7 @@ export async function GET(request: NextRequest) {
           closedIssues: 0,
           scores: [],
           hours: [],
-          gradeDistribution: { S: 0, A: 0, B: 0, C: 0 },
+          gradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
           qualityScores: [],
           qualityGradeDistribution: { A: 0, B: 0, C: 0, D: 0, E: 0 },
           consistencyScores: [],
@@ -309,7 +312,7 @@ export async function GET(request: NextRequest) {
             stats.hours.push(issue.completionHours);
           }
           if (issue.grade) {
-            const gradeKey = issue.grade as "S" | "A" | "B" | "C";
+            const gradeKey = issue.grade as "A" | "B" | "C" | "D" | "E";
             if (gradeKey in stats.gradeDistribution) {
               stats.gradeDistribution[gradeKey]++;
             }
