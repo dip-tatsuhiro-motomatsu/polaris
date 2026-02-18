@@ -29,10 +29,11 @@ import { useRepository } from "@/contexts/RepositoryContext";
 
 // 型定義
 interface GradeDistribution {
-  S: number;
   A: number;
   B: number;
   C: number;
+  D: number;
+  E: number;
 }
 
 interface QualityGradeDistribution {
@@ -96,12 +97,13 @@ const USER_COLORS = [
   "#0088FE",
 ];
 
-// グレードの色（速度）
+// グレードの色（速度・A-E統一）
 const GRADE_COLORS = {
-  S: "#a855f7",
   A: "#22c55e",
-  B: "#eab308",
-  C: "#ef4444",
+  B: "#3b82f6",
+  C: "#eab308",
+  D: "#f97316",
+  E: "#ef4444",
 };
 
 // 品質グレードの色
@@ -232,10 +234,11 @@ export default function HistoryPage() {
   // グレード分布のグラフデータ（チーム全体・速度）
   const gradeDistributionData = data.sprints.map((sprint) => ({
     name: `Sprint ${sprint.sprintNumber}`,
-    S: sprint.team.gradeDistribution.S,
     A: sprint.team.gradeDistribution.A,
     B: sprint.team.gradeDistribution.B,
     C: sprint.team.gradeDistribution.C,
+    D: sprint.team.gradeDistribution.D,
+    E: sprint.team.gradeDistribution.E,
   }));
 
   // 品質グレード分布のグラフデータ
@@ -451,10 +454,11 @@ export default function HistoryPage() {
                       <YAxis fontSize={12} />
                       <Tooltip />
                       <Legend />
-                      <Bar dataKey="S" stackId="a" fill={GRADE_COLORS.S} name="S" />
                       <Bar dataKey="A" stackId="a" fill={GRADE_COLORS.A} name="A" />
                       <Bar dataKey="B" stackId="a" fill={GRADE_COLORS.B} name="B" />
                       <Bar dataKey="C" stackId="a" fill={GRADE_COLORS.C} name="C" />
+                      <Bar dataKey="D" stackId="a" fill={GRADE_COLORS.D} name="D" />
+                      <Bar dataKey="E" stackId="a" fill={GRADE_COLORS.E} name="E" />
                     </BarChart>
                   </ResponsiveContainer>
                 </div>
@@ -631,7 +635,7 @@ export default function HistoryPage() {
                     </td>
                     <td className="p-2">
                       <div className="flex justify-center gap-1">
-                        {(["S", "A", "B", "C"] as const).map((grade) => (
+                        {(["A", "B", "C", "D", "E"] as const).map((grade) => (
                           <Badge
                             key={grade}
                             variant="outline"

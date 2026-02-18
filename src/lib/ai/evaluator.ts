@@ -97,18 +97,20 @@ export async function evaluateIssueQuality(
  * グレードに応じたメッセージを生成
  */
 function generateQualityMessage(
-  grade: "S" | "A" | "B" | "C",
+  grade: "A" | "B" | "C" | "D" | "E",
   score: number
 ): string {
   switch (grade) {
-    case "S":
-      return `素晴らしい記述です！（${score}点）継続してください。`;
     case "A":
-      return `良好な記述です（${score}点）。細部の改善でさらに良くなります。`;
+      return `素晴らしい記述です！（${score}点）継続してください。`;
     case "B":
-      return `改善の余地があります（${score}点）。フィードバックを参考にしてください。`;
+      return `良好な記述です（${score}点）。細部の改善でさらに良くなります。`;
     case "C":
+      return `改善の余地があります（${score}点）。フィードバックを参考にしてください。`;
+    case "D":
       return `大幅な改善が必要です（${score}点）。記述ガイドラインを確認してください。`;
+    case "E":
+      return `必須項目が不足しています（${score}点）。記述テンプレートを使用してください。`;
   }
 }
 

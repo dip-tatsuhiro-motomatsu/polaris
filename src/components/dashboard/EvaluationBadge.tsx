@@ -10,10 +10,11 @@ interface EvaluationBadgeProps {
 }
 
 const gradeColors: Record<Grade, string> = {
-  S: "bg-purple-500 hover:bg-purple-600 text-white",
   A: "bg-green-500 hover:bg-green-600 text-white",
-  B: "bg-yellow-500 hover:bg-yellow-600 text-white",
-  C: "bg-red-500 hover:bg-red-600 text-white",
+  B: "bg-blue-500 hover:bg-blue-600 text-white",
+  C: "bg-yellow-500 hover:bg-yellow-600 text-white",
+  D: "bg-orange-500 hover:bg-orange-600 text-white",
+  E: "bg-red-500 hover:bg-red-600 text-white",
 };
 
 const typeLabels: Record<string, string> = {

@@ -145,7 +145,7 @@ export interface StoredIssue {
 
   // 速度評価
   completionHours: number | null;
-  grade: "S" | "A" | "B" | "C" | null;  // 速度グレード
+  grade: "A" | "B" | "C" | "D" | "E" | null;  // 速度グレード
   score: number | null;                  // 速度スコア
   message: string | null;                // 速度評価メッセージ
 

@@ -67,7 +67,7 @@ interface IssueData {
   createdAt: string;
   closedAt: string | null;
   completionHours: number | null;
-  grade: "S" | "A" | "B" | "C" | null;
+  grade: "A" | "B" | "C" | "D" | "E" | null;
   score: number | null;
   message: string | null;
   qualityEvaluation: QualityEvaluation | null;
@@ -103,10 +103,11 @@ function formatRelativeTime(isoString: string | null): string | null {
 }
 
 interface GradeDistribution {
-  S: number;
   A: number;
   B: number;
   C: number;
+  D: number;
+  E: number;
 }
 
 interface QualityGradeDistribution {
@@ -161,29 +162,32 @@ interface DashboardData {
   lastSyncAt: string | null;
 }
 
-// グレードに応じた色を返す
-function getGradeColor(grade: "S" | "A" | "B" | "C" | null) {
+// グレードに応じた色を返す（A-E統一）
+function getGradeColor(grade: "A" | "B" | "C" | "D" | "E" | null) {
   switch (grade) {
-    case "S":
-      return "bg-purple-500 text-white";
     case "A":
       return "bg-green-500 text-white";
     case "B":
-      return "bg-yellow-500 text-white";
+      return "bg-blue-500 text-white";
     case "C":
+      return "bg-yellow-500 text-white";
+    case "D":
+      return "bg-orange-500 text-white";
+    case "E":
       return "bg-red-500 text-white";
     default:
       return "bg-gray-300 text-gray-700";
   }
 }
 
-// スコアに応じたグレードを計算
-function getGradeFromScore(score: number | null): "S" | "A" | "B" | "C" | null {
+// スコアに応じたグレードを計算（A-E）
+function getGradeFromScore(score: number | null): "A" | "B" | "C" | "D" | "E" | null {
   if (score === null) return null;
-  if (score >= 101) return "S";
-  if (score >= 71) return "A";
-  if (score >= 41) return "B";
-  return "C";
+  if (score >= 81) return "A";
+  if (score >= 61) return "B";
+  if (score >= 41) return "C";
+  if (score >= 21) return "D";
+  return "E";
 }
 
 // 品質グレードに応じた色を返す
@@ -249,7 +253,7 @@ function OverallStatsCard({ stats, title }: { stats: UserStats | DashboardData["
             </div>
           </div>
           <div className="flex gap-2 mt-2 justify-center">
-            {(["S", "A", "B", "C"] as const).map((grade) => (
+            {(["A", "B", "C", "D", "E"] as const).map((grade) => (
               <div key={grade} className="flex items-center gap-1">
                 <Badge className={`${getGradeColor(grade)} text-xs`}>{grade}</Badge>
                 <span className="text-xs">{stats.gradeDistribution[grade]}</span>

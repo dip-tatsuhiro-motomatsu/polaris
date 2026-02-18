@@ -1,35 +1,42 @@
 import { SpeedCriterion, QualityCheckItem, Grade, QualityGrade, ConsistencyGrade, ConsistencyCheckItem } from "@/types/evaluation";
 
 /**
- * 完了速度評価基準
- * - S (120点): 24時間以内 - 小さな単位で開発できています！
- * - A (100点): 72時間以内 - 非常に健全な開発スピードです
- * - B (70点): 120時間以内 - 少しタスクが肥大化しているかも？
- * - C (40点): 120時間超 - 何か詰まっているはず
+ * 完了速度評価基準（リードタイム）
+ * - A (100点): 2日以内 - 迅速な対応ができています
+ * - B (80点): 3日以内 - 良好なペースです
+ * - C (60点): 4日以内 - 標準的なペースです
+ * - D (40点): 5日以内 - 改善の余地があります
+ * - E (20点): 5日超 - 大幅な改善が必要です
  */
 export const SPEED_CRITERIA: SpeedCriterion[] = [
   {
-    maxHours: 24,
-    score: 120,
-    grade: "S",
-    message: "小さな単位で開発できています！素晴らしい。",
-  },
-  {
-    maxHours: 72,
+    maxHours: 48, // 2日
     score: 100,
     grade: "A",
-    message: "非常に健全な開発スピードです。",
+    message: "迅速な対応ができています。素晴らしい。",
   },
   {
-    maxHours: 120,
-    score: 70,
+    maxHours: 72, // 3日
+    score: 80,
     grade: "B",
+    message: "良好なペースです。",
+  },
+  {
+    maxHours: 96, // 4日
+    score: 60,
+    grade: "C",
+    message: "標準的なペースです。",
+  },
+  {
+    maxHours: 120, // 5日
+    score: 40,
+    grade: "D",
     message: "少しタスクが肥大化しているかも？分担を検討。",
   },
   {
     maxHours: Infinity,
-    score: 40,
-    grade: "C",
+    score: 20,
+    grade: "E",
     message: "何か詰まっているはず。メンターに相談しよう。",
   },
 ];
@@ -119,18 +126,20 @@ export const QUALITY_GRADE_CRITERIA: QualityGradeCriterion[] = [
 ];
 
 /**
- * グレードから点数範囲を取得
+ * グレードから点数範囲を取得（速度評価用）
  */
 export function getScoreRange(grade: Grade): { min: number; max: number } {
   switch (grade) {
-    case "S":
-      return { min: 101, max: 120 };
     case "A":
-      return { min: 71, max: 100 };
+      return { min: 81, max: 100 };
     case "B":
-      return { min: 41, max: 70 };
+      return { min: 61, max: 80 };
     case "C":
-      return { min: 0, max: 40 };
+      return { min: 41, max: 60 };
+    case "D":
+      return { min: 21, max: 40 };
+    case "E":
+      return { min: 0, max: 20 };
   }
 }
 
@@ -138,10 +147,11 @@ export function getScoreRange(grade: Grade): { min: number; max: number } {
  * 点数からグレードを判定（速度評価用）
  */
 export function scoreToGrade(score: number): Grade {
-  if (score >= 101) return "S";
-  if (score >= 71) return "A";
-  if (score >= 41) return "B";
-  return "C";
+  if (score >= 81) return "A";
+  if (score >= 61) return "B";
+  if (score >= 41) return "C";
+  if (score >= 21) return "D";
+  return "E";
 }
 
 /**
