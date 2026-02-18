@@ -4,12 +4,14 @@
  * GitHubからIssueを取得し、DBに同期する。
  * - 差分同期（since指定）対応
  * - コラボレーターとの紐付け
+ * - スプリント番号の計算（Issueの作成日ベース）
  */
 
 import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
 import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
 import { getIssues } from "@/lib/github/client";
+import { SprintCalculator, SprintConfig } from "@/domain/sprint";
 import type { Issue, NewIssue, Collaborator } from "@/infrastructure/database/schema";
 
 export interface SyncIssuesInput {
@@ -21,6 +23,7 @@ export interface SyncIssuesInput {
 export interface SyncIssuesOutput {
   success: boolean;
   syncedCount?: number;
+  currentSprintNumber?: number;
   issues?: Issue[];
   error?: string;
 }
@@ -47,6 +50,19 @@ export class SyncIssuesUseCase {
       return { success: false, error: "リポジトリが見つかりません" };
     }
 
+    // スプリント設定からSprintCalculatorを作成
+    const sprintConfig: SprintConfig = {
+      startDayOfWeek: repository.sprintStartDayOfWeek ?? 6, // デフォルト: 土曜日
+      durationWeeks: repository.sprintDurationWeeks ?? 1,
+      baseDate: repository.trackingStartDate
+        ? new Date(repository.trackingStartDate)
+        : new Date(),
+    };
+    const sprintCalculator = new SprintCalculator(sprintConfig);
+
+    // 現在のスプリント番号を計算
+    const currentSprintNumber = sprintCalculator.calculateSprintNumber(new Date()).value;
+
     // GitHubからIssue取得
     let githubIssues;
     try {
@@ -63,7 +79,7 @@ export class SyncIssuesUseCase {
     const issuesOnly = githubIssues.filter((issue) => !issue.pull_request);
 
     if (issuesOnly.length === 0) {
-      return { success: true, syncedCount: 0, issues: [] };
+      return { success: true, syncedCount: 0, currentSprintNumber, issues: [] };
     }
 
     // コラボレーター一覧を取得（紐付け用）
@@ -75,7 +91,7 @@ export class SyncIssuesUseCase {
       collaboratorMap.set(collab.githubUserName, collab);
     }
 
-    // GitHub IssueをDB形式に変換
+    // GitHub IssueをDB形式に変換（スプリント番号を計算）
     const issuesToUpsert: NewIssue[] = issuesOnly.map((githubIssue) => {
       const authorLogin = githubIssue.user?.login;
       const assigneeLogin = githubIssue.assignee?.login;
@@ -87,6 +103,10 @@ export class SyncIssuesUseCase {
         ? collaboratorMap.get(assigneeLogin)
         : undefined;
 
+      // Issue作成日からスプリント番号を計算
+      const issueCreatedAt = new Date(githubIssue.created_at);
+      const issueSprintNumber = sprintCalculator.calculateIssueSprintNumber(issueCreatedAt);
+
       return {
         repositoryId: input.repositoryId,
         githubNumber: githubIssue.number,
@@ -95,7 +115,8 @@ export class SyncIssuesUseCase {
         state: githubIssue.state,
         authorCollaboratorId: authorCollaborator?.id ?? null,
         assigneeCollaboratorId: assigneeCollaborator?.id ?? null,
-        githubCreatedAt: new Date(githubIssue.created_at),
+        sprintNumber: issueSprintNumber.value,
+        githubCreatedAt: issueCreatedAt,
         githubClosedAt: githubIssue.closed_at
           ? new Date(githubIssue.closed_at)
           : null,
@@ -108,6 +129,7 @@ export class SyncIssuesUseCase {
     return {
       success: true,
       syncedCount: savedIssues.length,
+      currentSprintNumber,
       issues: savedIssues,
     };
   }

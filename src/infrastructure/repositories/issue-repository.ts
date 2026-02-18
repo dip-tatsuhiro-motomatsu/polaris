@@ -30,6 +30,7 @@ export class IssueRepository {
           state: data.state,
           authorCollaboratorId: data.authorCollaboratorId,
           assigneeCollaboratorId: data.assigneeCollaboratorId,
+          sprintNumber: data.sprintNumber,
           githubClosedAt: data.githubClosedAt,
           updatedAt: new Date(),
         },
@@ -55,6 +56,7 @@ export class IssueRepository {
           state: issues.state,
           authorCollaboratorId: issues.authorCollaboratorId,
           assigneeCollaboratorId: issues.assigneeCollaboratorId,
+          sprintNumber: issues.sprintNumber,
           githubClosedAt: issues.githubClosedAt,
           updatedAt: new Date(),
         },
@@ -80,6 +82,24 @@ export class IssueRepository {
    */
   async findByRepositoryId(repositoryId: number): Promise<Issue[]> {
     return db.select().from(issues).where(eq(issues.repositoryId, repositoryId));
+  }
+
+  /**
+   * リポジトリIDとスプリント番号でIssue一覧を取得する
+   */
+  async findBySprintNumber(
+    repositoryId: number,
+    sprintNumber: number
+  ): Promise<Issue[]> {
+    return db
+      .select()
+      .from(issues)
+      .where(
+        and(
+          eq(issues.repositoryId, repositoryId),
+          eq(issues.sprintNumber, sprintNumber)
+        )
+      );
   }
 
   /**

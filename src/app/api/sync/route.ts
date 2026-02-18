@@ -5,6 +5,7 @@ import { SPEED_CRITERIA } from "@/config/evaluation-criteria";
 import { evaluateIssueQuality } from "@/lib/evaluation/quality";
 import { evaluateConsistency } from "@/lib/evaluation/consistency";
 import { getLinkedPRsForIssue } from "@/lib/github/linked-prs";
+import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
 import type { Grade } from "@/types/evaluation";
 import type { RepositoryConfig, SyncMetadata, StoredIssue } from "@/types/settings";
 
@@ -25,27 +26,14 @@ function getGradeFromHours(hours: number): { grade: Grade; score: number; messag
   return { grade: last.grade, score: last.score, message: last.message };
 }
 
-// スプリント開始日を計算
-function getSprintStartDate(date: Date, startDayOfWeek: number): Date {
-  const d = new Date(date);
-  const dayOfWeek = d.getDay();
-  const diff = (dayOfWeek - startDayOfWeek + 7) % 7;
-  d.setDate(d.getDate() - diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
-
-// スプリント番号を計算
-function getSprintNumber(
-  issueDate: Date,
-  baseSprint: Date,
-  durationWeeks: number
-): number {
-  const diffDays = Math.floor(
-    (getSprintStartDate(issueDate, baseSprint.getDay()).getTime() - baseSprint.getTime()) /
-      (1000 * 60 * 60 * 24)
-  );
-  return Math.floor(diffDays / (durationWeeks * 7)) + 1;
+// SprintCalculatorのファクトリ関数
+function createSprintCalculator(sprint: RepositoryConfig["sprint"]): SprintCalculator {
+  const config: SprintConfig = {
+    startDayOfWeek: sprint.startDayOfWeek,
+    durationWeeks: sprint.durationWeeks,
+    baseDate: new Date(sprint.baseDate),
+  };
+  return new SprintCalculator(config);
 }
 
 // GitHub IssueをStoredIssue形式に変換（評価フィールドは含まない）
@@ -365,12 +353,12 @@ export async function POST(request: NextRequest) {
 
     const { owner, repo, githubPat, sprint, trackedUsers } = config;
 
-    // 現在のスプリント情報を計算
+    // SprintCalculatorを使用してスプリント情報を計算
+    const sprintCalculator = createSprintCalculator(sprint);
     const now = new Date();
-    const currentSprintStart = getSprintStartDate(now, sprint.startDayOfWeek);
-    const baseDate = new Date(sprint.baseDate);
-    const baseSprint = getSprintStartDate(baseDate, sprint.startDayOfWeek);
-    const currentSprintNumber = getSprintNumber(now, baseSprint, sprint.durationWeeks);
+    const currentSprint = sprintCalculator.getCurrentSprint(now);
+    const currentSprintNumber = currentSprint.number.value;
+    const currentSprintStart = currentSprint.period.startDate;
 
     // 同期メタデータを取得
     const syncMetaRef = db.collection("repositories").doc(repoId).collection("syncMetadata").doc("latest");
@@ -437,7 +425,7 @@ export async function POST(request: NextRequest) {
           }
 
           const issueDate = new Date(issue.created_at);
-          const issueSprintNumber = getSprintNumber(issueDate, baseSprint, sprint.durationWeeks);
+          const issueSprintNumber = sprintCalculator.calculateIssueSprintNumber(issueDate).value;
 
           // 過去スプリントのclosedはアーカイブ済みとして保存
           const isArchived = issueSprintNumber < currentSprintNumber && issue.state === "closed";
@@ -493,7 +481,7 @@ export async function POST(request: NextRequest) {
           }
 
           const issueDate = new Date(issue.created_at);
-          const issueSprintNumber = getSprintNumber(issueDate, baseSprint, sprint.durationWeeks);
+          const issueSprintNumber = sprintCalculator.calculateIssueSprintNumber(issueDate).value;
 
           // 過去スプリントのclosedはスキップ（既にアーカイブ済みのはず）
           if (issueSprintNumber < currentSprintNumber && issue.state === "closed") {
@@ -622,11 +610,10 @@ export async function GET(request: NextRequest) {
       baseDate: configData.sprint?.baseDate || new Date().toISOString(),
     };
 
-    // 現在のスプリント情報
+    // SprintCalculatorを使用してスプリント番号を計算
+    const sprintCalculator = createSprintCalculator(sprint);
     const now = new Date();
-    const baseDate = new Date(sprint.baseDate);
-    const baseSprint = getSprintStartDate(baseDate, sprint.startDayOfWeek);
-    const currentSprintNumber = getSprintNumber(now, baseSprint, sprint.durationWeeks);
+    const currentSprintNumber = sprintCalculator.calculateSprintNumber(now).value;
 
     // 同期メタデータを取得
     const syncMetaRef = db.collection("repositories").doc(repoId).collection("syncMetadata").doc("latest");
