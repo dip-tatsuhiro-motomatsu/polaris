@@ -2,9 +2,30 @@
  * Issueの永続化実装
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc, gte, lte, sql } from "drizzle-orm";
 import { db } from "../database";
-import { issues, type Issue, type NewIssue } from "../database/schema";
+import {
+  issues,
+  evaluations,
+  collaborators,
+  type Issue,
+  type NewIssue,
+  type Evaluation,
+  type Collaborator,
+} from "../database/schema";
+
+export interface IssueWithEvaluation extends Issue {
+  evaluation: Evaluation | null;
+  assignee: Collaborator | null;
+}
+
+export interface FindIssuesOptions {
+  state?: "open" | "closed" | "all";
+  sprintStart?: Date;
+  sprintEnd?: Date;
+  limit?: number;
+  offset?: number;
+}
 
 export class IssueRepository {
   /**
@@ -150,5 +171,61 @@ export class IssueRepository {
       .delete(issues)
       .where(eq(issues.repositoryId, repositoryId));
     return result.rowCount ?? 0;
+  }
+
+  /**
+   * リポジトリIDでIssue一覧を取得する（評価データ付き、フィルタリング対応）
+   */
+  async findByRepositoryIdWithEvaluations(
+    repositoryId: number,
+    options: FindIssuesOptions = {}
+  ): Promise<{ issues: IssueWithEvaluation[]; total: number }> {
+    const { state = "all", sprintStart, sprintEnd, limit = 50, offset = 0 } = options;
+
+    // 条件を構築
+    const conditions = [eq(issues.repositoryId, repositoryId)];
+
+    if (state !== "all") {
+      conditions.push(eq(issues.state, state));
+    }
+
+    if (sprintStart) {
+      conditions.push(gte(issues.githubCreatedAt, sprintStart));
+    }
+
+    if (sprintEnd) {
+      conditions.push(lte(issues.githubCreatedAt, sprintEnd));
+    }
+
+    // 総件数を取得
+    const [countResult] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(issues)
+      .where(and(...conditions));
+
+    const total = countResult?.count ?? 0;
+
+    // Issue一覧を取得（評価データとassignee情報付き）
+    const result = await db
+      .select({
+        issue: issues,
+        evaluation: evaluations,
+        assignee: collaborators,
+      })
+      .from(issues)
+      .leftJoin(evaluations, eq(issues.id, evaluations.issueId))
+      .leftJoin(collaborators, eq(issues.assigneeCollaboratorId, collaborators.id))
+      .where(and(...conditions))
+      .orderBy(desc(issues.githubCreatedAt))
+      .limit(limit)
+      .offset(offset);
+
+    const issuesWithEvaluations: IssueWithEvaluation[] = result.map((row) => ({
+      ...row.issue,
+      evaluation: row.evaluation,
+      assignee: row.assignee,
+    }));
+
+    return { issues: issuesWithEvaluations, total };
   }
 }

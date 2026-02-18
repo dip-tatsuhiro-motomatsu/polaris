@@ -1,39 +1,33 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminFirestore } from "@/lib/firebase/admin";
-import type { RepositoryConfig, StoredIssue } from "@/types/settings";
+import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
+import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
+import { EvaluationRepository } from "@/infrastructure/repositories/evaluation-repository";
+import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
+import { TrackedCollaboratorRepository } from "@/infrastructure/repositories/tracked-collaborator-repository";
+import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
 
 export const dynamic = "force-dynamic";
 
-// スプリント開始日を計算
-function getSprintStartDate(date: Date, startDayOfWeek: number): Date {
-  const d = new Date(date);
-  const dayOfWeek = d.getDay();
-  const diff = (dayOfWeek - startDayOfWeek + 7) % 7;
-  d.setDate(d.getDate() - diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
+const repositoryRepo = new RepositoryRepository();
+const issueRepo = new IssueRepository();
+const evaluationRepo = new EvaluationRepository();
+const collaboratorRepo = new CollaboratorRepository();
+const trackedCollaboratorRepo = new TrackedCollaboratorRepository();
 
-// スプリント終了日を計算
-function getSprintEndDate(startDate: Date, durationWeeks: number): Date {
-  const endDate = new Date(startDate);
-  endDate.setDate(endDate.getDate() + durationWeeks * 7 - 1);
-  endDate.setHours(23, 59, 59, 999);
-  return endDate;
-}
-
-// スプリント番号を計算
-function getSprintNumber(
-  date: Date,
-  baseSprint: Date,
-  durationWeeks: number,
-  startDayOfWeek: number
-): number {
-  const sprintStart = getSprintStartDate(date, startDayOfWeek);
-  const diffDays = Math.floor(
-    (sprintStart.getTime() - baseSprint.getTime()) / (1000 * 60 * 60 * 24)
-  );
-  return Math.floor(diffDays / (durationWeeks * 7)) + 1;
+// SprintCalculatorのファクトリ関数
+function createSprintCalculator(repository: {
+  sprintStartDayOfWeek: number;
+  sprintDurationWeeks: number;
+  trackingStartDate: string | null;
+}): SprintCalculator {
+  const config: SprintConfig = {
+    startDayOfWeek: repository.sprintStartDayOfWeek,
+    durationWeeks: repository.sprintDurationWeeks,
+    baseDate: repository.trackingStartDate
+      ? new Date(repository.trackingStartDate)
+      : new Date(),
+  };
+  return new SprintCalculator(config);
 }
 
 // 曜日名
@@ -42,6 +36,14 @@ const DAY_NAMES = ["日", "月", "火", "水", "木", "金", "土"];
 // 日付フォーマット
 const formatDate = (d: Date) =>
   `${d.getMonth() + 1}/${d.getDate()}(${DAY_NAMES[d.getDay()]})`;
+
+// リードタイム評価のグレードを計算
+function calculateLeadTimeGrade(hours: number): { grade: string; score: number } {
+  if (hours <= 24) return { grade: "S", score: 100 };
+  if (hours <= 72) return { grade: "A", score: 80 };
+  if (hours <= 168) return { grade: "B", score: 60 };
+  return { grade: "C", score: 40 };
+}
 
 // スプリント統計の型
 interface SprintStats {
@@ -55,11 +57,9 @@ interface SprintStats {
     averageScore: number | null;
     averageHours: number | null;
     gradeDistribution: { S: number; A: number; B: number; C: number };
-    // 品質評価
     evaluatedIssues: number;
     averageQualityScore: number | null;
     qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
-    // PR整合性評価
     consistencyEvaluatedIssues: number;
     averageConsistencyScore: number | null;
     consistencyGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
@@ -71,115 +71,161 @@ interface SprintStats {
     averageScore: number | null;
     averageHours: number | null;
     gradeDistribution: { S: number; A: number; B: number; C: number };
-    // 品質評価
     averageQualityScore: number | null;
     qualityGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
-    // PR整合性評価
     averageConsistencyScore: number | null;
     consistencyGradeDistribution: { A: number; B: number; C: number; D: number; E: number };
   }[];
+}
+
+interface IssueWithEvaluation {
+  sprintNumber: number;
+  creator: string;
+  state: string;
+  score: number | null;
+  completionHours: number | null;
+  grade: string | null;
+  qualityScore: number | null;
+  qualityGrade: string | null;
+  consistencyScore: number | null;
+  consistencyGrade: string | null;
 }
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const sprintCount = parseInt(searchParams.get("count") || "12", 10);
-    const repoId = searchParams.get("repoId");
+    const repoIdParam = searchParams.get("repoId");
 
-    const db = getAdminFirestore();
-
-    // 設定を取得
-    let configDoc;
-    if (repoId) {
-      // 指定されたリポジトリを取得
-      const doc = await db.collection("repositories").doc(repoId).get();
-      if (!doc.exists) {
+    // リポジトリを取得
+    let repository;
+    if (repoIdParam) {
+      const repoId = parseInt(repoIdParam, 10);
+      if (isNaN(repoId)) {
+        return NextResponse.json(
+          { error: "無効なリポジトリIDです" },
+          { status: 400 }
+        );
+      }
+      repository = await repositoryRepo.findById(repoId);
+      if (!repository) {
         return NextResponse.json(
           { error: "指定されたリポジトリが見つかりません。" },
           { status: 404 }
         );
       }
-      configDoc = doc;
     } else {
-      // 後方互換: 最初のアクティブなリポジトリを取得
-      const snapshot = await db.collection("repositories").where("isActive", "==", true).limit(1).get();
-      if (snapshot.empty) {
+      const allRepos = await repositoryRepo.findAll();
+      if (allRepos.length === 0) {
         return NextResponse.json(
           { error: "設定が見つかりません。設定画面でリポジトリを登録してください。" },
           { status: 404 }
         );
       }
-      configDoc = snapshot.docs[0];
+      repository = allRepos[0];
     }
 
-    const repoDocId = configDoc.id;
-    const configData = configDoc.data()!;
-    const config: RepositoryConfig = {
-      id: repoDocId,
-      owner: configData.owner,
-      repo: configData.repo,
-      githubPat: configData.githubPat,
-      sprint: {
-        startDayOfWeek: configData.sprint?.startDayOfWeek ?? 6,
-        durationWeeks: configData.sprint?.durationWeeks ?? 1,
-        baseDate: configData.sprint?.baseDate || new Date().toISOString(),
-      },
-      trackedUsers: configData.trackedUsers || [],
-      isActive: configData.isActive ?? true,
-      createdAt: configData.createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
-      updatedAt: configData.updatedAt?.toDate?.()?.toISOString() || new Date().toISOString(),
-    };
+    const { id: repoId, ownerName: owner, repoName: repo } = repository;
 
-    const { owner, repo, sprint, trackedUsers } = config;
-
-    // 現在のスプリント情報を計算
+    // SprintCalculatorを使用してスプリント情報を計算
+    const sprintCalculator = createSprintCalculator({
+      sprintStartDayOfWeek: repository.sprintStartDayOfWeek ?? 6,
+      sprintDurationWeeks: repository.sprintDurationWeeks,
+      trackingStartDate: repository.trackingStartDate,
+    });
     const now = new Date();
-    const baseDate = new Date(sprint.baseDate);
-    const baseSprint = getSprintStartDate(baseDate, sprint.startDayOfWeek);
-    const currentSprintStart = getSprintStartDate(now, sprint.startDayOfWeek);
-    const currentSprintNumber = getSprintNumber(now, baseSprint, sprint.durationWeeks, sprint.startDayOfWeek);
+    const currentSprint = sprintCalculator.getCurrentSprint(now);
+    const currentSprintNumber = currentSprint.number.value;
+
+    // 追跡対象ユーザーを取得
+    const trackedUserNames = await trackedCollaboratorRepo.findTrackedUserNamesByRepositoryId(repoId);
 
     // 対象スプリント番号の範囲
     const minSprintNumber = currentSprintNumber - sprintCount + 1;
 
-    // Firestoreから全Issueを取得（対象スプリント範囲）
-    const issuesRef = db.collection("repositories").doc(repoDocId).collection("issues");
-    const issuesSnapshot = await issuesRef
-      .where("sprintNumber", ">=", minSprintNumber)
-      .where("sprintNumber", "<=", currentSprintNumber)
-      .get();
+    // 全Issueを取得
+    const allIssues = await issueRepo.findByRepositoryId(repoId);
+
+    // 各IssueにスプリントIDが設定されていて、対象範囲内のものをフィルタ
+    const targetIssues = allIssues.filter(
+      (issue) =>
+        issue.sprintNumber !== null &&
+        issue.sprintNumber >= minSprintNumber &&
+        issue.sprintNumber <= currentSprintNumber
+    );
+
+    // 各Issueの評価データと作成者情報を取得
+    const issuesWithEvaluations: IssueWithEvaluation[] = [];
+
+    for (const issue of targetIssues) {
+      // 作成者の名前を取得
+      let creatorName = "unknown";
+      if (issue.authorCollaboratorId) {
+        const author = await collaboratorRepo.findById(issue.authorCollaboratorId);
+        if (author) creatorName = author.githubUserName;
+      }
+
+      // trackedUsersフィルタ
+      if (trackedUserNames.length > 0 && !trackedUserNames.includes(creatorName)) {
+        continue;
+      }
+
+      // 評価データを取得
+      const evaluation = await evaluationRepo.findByIssueId(issue.id);
+
+      // リードタイム評価を計算
+      let score: number | null = null;
+      let completionHours: number | null = null;
+      let grade: string | null = null;
+
+      if (issue.state === "closed" && issue.githubClosedAt && issue.githubCreatedAt) {
+        const diffMs = issue.githubClosedAt.getTime() - issue.githubCreatedAt.getTime();
+        completionHours = Math.round((diffMs / (1000 * 60 * 60)) * 10) / 10;
+        const leadTimeEval = calculateLeadTimeGrade(completionHours);
+        score = leadTimeEval.score;
+        grade = leadTimeEval.grade;
+      }
+
+      issuesWithEvaluations.push({
+        sprintNumber: issue.sprintNumber!,
+        creator: creatorName,
+        state: issue.state,
+        score,
+        completionHours,
+        grade,
+        qualityScore: evaluation?.qualityScore || null,
+        qualityGrade: evaluation?.qualityGrade || null,
+        consistencyScore: evaluation?.consistencyScore || null,
+        consistencyGrade: evaluation?.consistencyGrade || null,
+      });
+    }
 
     // スプリント番号でグループ化
-    const issuesBySprintMap = new Map<number, StoredIssue[]>();
-    issuesSnapshot.docs.forEach((doc) => {
-      const data = doc.data() as StoredIssue;
-      // trackedUsersフィルタ
-      if (trackedUsers.length > 0 && !trackedUsers.includes(data.creator)) {
-        return;
+    const issuesBySprintMap = new Map<number, IssueWithEvaluation[]>();
+    for (const issue of issuesWithEvaluations) {
+      if (!issuesBySprintMap.has(issue.sprintNumber)) {
+        issuesBySprintMap.set(issue.sprintNumber, []);
       }
-      const sprintNum = data.sprintNumber;
-      if (!issuesBySprintMap.has(sprintNum)) {
-        issuesBySprintMap.set(sprintNum, []);
-      }
-      issuesBySprintMap.get(sprintNum)!.push(data);
-    });
+      issuesBySprintMap.get(issue.sprintNumber)!.push(issue);
+    }
 
     // スプリントごとの統計を計算
     const sprintStats: SprintStats[] = [];
 
     for (let i = 0; i < sprintCount; i++) {
       const offset = -i;
-      const sprintStart = new Date(currentSprintStart);
-      sprintStart.setDate(sprintStart.getDate() + offset * sprint.durationWeeks * 7);
-      const sprintEnd = getSprintEndDate(sprintStart, sprint.durationWeeks);
-      const sprintNumber = currentSprintNumber + offset;
+      const targetSprint = sprintCalculator.getSprintWithOffset(now, offset);
+      const sprintStart = targetSprint.period.startDate;
+      const sprintEnd = targetSprint.period.endDate;
+      const sprintNumber = targetSprint.number.value;
 
       const sprintIssues = issuesBySprintMap.get(sprintNumber) || [];
 
       // チーム全体の統計
       const closedIssues = sprintIssues.filter((i) => i.state === "closed" && i.score !== null);
-      const evaluatedIssues = sprintIssues.filter((i) => i.qualityEvaluation !== null);
-      const consistencyEvaluatedIssues = sprintIssues.filter((i) => i.consistencyEvaluation !== null);
+      const evaluatedIssues = sprintIssues.filter((i) => i.qualityScore !== null);
+      const consistencyEvaluatedIssues = sprintIssues.filter((i) => i.consistencyScore !== null);
+
       const teamStats = {
         totalIssues: sprintIssues.length,
         closedIssues: closedIssues.length,
@@ -195,29 +241,27 @@ export async function GET(request: NextRequest) {
           B: closedIssues.filter((i) => i.grade === "B").length,
           C: closedIssues.filter((i) => i.grade === "C").length,
         },
-        // 品質評価
         evaluatedIssues: evaluatedIssues.length,
         averageQualityScore: evaluatedIssues.length > 0
-          ? Math.round((evaluatedIssues.reduce((sum, i) => sum + (i.qualityEvaluation?.totalScore || 0), 0) / evaluatedIssues.length) * 10) / 10
+          ? Math.round((evaluatedIssues.reduce((sum, i) => sum + (i.qualityScore || 0), 0) / evaluatedIssues.length) * 10) / 10
           : null,
         qualityGradeDistribution: {
-          A: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "A").length,
-          B: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "B").length,
-          C: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "C").length,
-          D: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "D").length,
-          E: evaluatedIssues.filter((i) => i.qualityEvaluation?.grade === "E").length,
+          A: evaluatedIssues.filter((i) => i.qualityGrade === "A").length,
+          B: evaluatedIssues.filter((i) => i.qualityGrade === "B").length,
+          C: evaluatedIssues.filter((i) => i.qualityGrade === "C").length,
+          D: evaluatedIssues.filter((i) => i.qualityGrade === "D").length,
+          E: evaluatedIssues.filter((i) => i.qualityGrade === "E").length,
         },
-        // PR整合性評価
         consistencyEvaluatedIssues: consistencyEvaluatedIssues.length,
         averageConsistencyScore: consistencyEvaluatedIssues.length > 0
-          ? Math.round((consistencyEvaluatedIssues.reduce((sum, i) => sum + (i.consistencyEvaluation?.totalScore || 0), 0) / consistencyEvaluatedIssues.length) * 10) / 10
+          ? Math.round((consistencyEvaluatedIssues.reduce((sum, i) => sum + (i.consistencyScore || 0), 0) / consistencyEvaluatedIssues.length) * 10) / 10
           : null,
         consistencyGradeDistribution: {
-          A: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "A").length,
-          B: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "B").length,
-          C: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "C").length,
-          D: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "D").length,
-          E: consistencyEvaluatedIssues.filter((i) => i.consistencyEvaluation?.grade === "E").length,
+          A: consistencyEvaluatedIssues.filter((i) => i.consistencyGrade === "A").length,
+          B: consistencyEvaluatedIssues.filter((i) => i.consistencyGrade === "B").length,
+          C: consistencyEvaluatedIssues.filter((i) => i.consistencyGrade === "C").length,
+          D: consistencyEvaluatedIssues.filter((i) => i.consistencyGrade === "D").length,
+          E: consistencyEvaluatedIssues.filter((i) => i.consistencyGrade === "E").length,
         },
       };
 
@@ -236,7 +280,7 @@ export async function GET(request: NextRequest) {
       }>();
 
       // trackedUsersの順序で初期化
-      for (const username of trackedUsers) {
+      for (const username of trackedUserNames) {
         userStatsMap.set(username, {
           username,
           totalIssues: 0,
@@ -265,20 +309,31 @@ export async function GET(request: NextRequest) {
             stats.hours.push(issue.completionHours);
           }
           if (issue.grade) {
-            stats.gradeDistribution[issue.grade]++;
+            const gradeKey = issue.grade as "S" | "A" | "B" | "C";
+            if (gradeKey in stats.gradeDistribution) {
+              stats.gradeDistribution[gradeKey]++;
+            }
           }
         }
 
-        // 品質評価の集計
-        if (issue.qualityEvaluation) {
-          stats.qualityScores.push(issue.qualityEvaluation.totalScore);
-          stats.qualityGradeDistribution[issue.qualityEvaluation.grade]++;
+        if (issue.qualityScore !== null) {
+          stats.qualityScores.push(issue.qualityScore);
+          if (issue.qualityGrade) {
+            const qGrade = issue.qualityGrade as "A" | "B" | "C" | "D" | "E";
+            if (qGrade in stats.qualityGradeDistribution) {
+              stats.qualityGradeDistribution[qGrade]++;
+            }
+          }
         }
 
-        // PR整合性評価の集計
-        if (issue.consistencyEvaluation) {
-          stats.consistencyScores.push(issue.consistencyEvaluation.totalScore);
-          stats.consistencyGradeDistribution[issue.consistencyEvaluation.grade]++;
+        if (issue.consistencyScore !== null) {
+          stats.consistencyScores.push(issue.consistencyScore);
+          if (issue.consistencyGrade) {
+            const cGrade = issue.consistencyGrade as "A" | "B" | "C" | "D" | "E";
+            if (cGrade in stats.consistencyGradeDistribution) {
+              stats.consistencyGradeDistribution[cGrade]++;
+            }
+          }
         }
       }
 
@@ -318,7 +373,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       repository: `${owner}/${repo}`,
-      trackedUsers,
+      trackedUsers: trackedUserNames,
       sprintCount: sprintStats.length,
       sprints: sprintStats,
     });

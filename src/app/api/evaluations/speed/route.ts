@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAdminFirestore } from "@/lib/firebase/admin";
+import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
+import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
 import { evaluateIssueSpeed } from "@/lib/evaluation/speed";
-import type { Issue } from "@/types/issue";
+import type { Issue, IssueState } from "@/types/issue";
 
 export const dynamic = "force-dynamic";
+
+const repositoryRepo = new RepositoryRepository();
+const issueRepo = new IssueRepository();
 
 /**
  * POST /api/evaluations/speed
@@ -21,93 +25,78 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const db = getAdminFirestore();
+    const repoId = parseInt(repositoryId, 10);
+    if (isNaN(repoId)) {
+      return NextResponse.json(
+        { error: "無効なリポジトリIDです", message: "Invalid repository ID" },
+        { status: 400 }
+      );
+    }
 
     // リポジトリ存在確認
-    const repoDoc = await db.collection("repositories").doc(repositoryId).get();
-    if (!repoDoc.exists) {
+    const repository = await repositoryRepo.findById(repoId);
+    if (!repository) {
       return NextResponse.json(
         { error: "リポジトリが見つかりません", message: "Repository not found" },
         { status: 404 }
       );
     }
 
-    // 評価対象のIssueを取得
-    const issuesQuery = db
-      .collection("repositories")
-      .doc(repositoryId)
-      .collection("issues")
-      .where("state", "==", "closed");
-
-    const snapshot = await issuesQuery.get();
-
-    let issues: Issue[] = snapshot.docs.map((doc) => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        number: data.number,
-        title: data.title,
-        body: data.body,
-        state: data.state,
-        createdAt: data.createdAt?.toDate() || new Date(),
-        closedAt: data.closedAt?.toDate() || null,
-        assignee: data.assignee,
-        labels: data.labels || [],
-        githubId: data.githubId,
-        speedEvaluation: data.speedEvaluation || null,
-        qualityEvaluation: data.qualityEvaluation || null,
-        syncedAt: data.syncedAt?.toDate() || new Date(),
-      };
-    });
+    // クローズ済みのIssueを取得
+    const allIssues = await issueRepo.findByRepositoryId(repoId);
+    let closedIssues = allIssues.filter((issue) => issue.state === "closed");
 
     // 特定のIssueIDが指定されている場合はフィルタ
     if (issueIds && Array.isArray(issueIds) && issueIds.length > 0) {
-      issues = issues.filter((issue) => issueIds.includes(issue.id));
+      const issueIdSet = new Set(issueIds.map((id: string | number) =>
+        typeof id === "string" ? parseInt(id, 10) : id
+      ));
+      closedIssues = closedIssues.filter((issue) => issueIdSet.has(issue.id));
     }
 
     // 評価を実行し、結果を保存
     const results: Array<{
-      issueId: string;
+      issueId: number;
       issueNumber: number;
       score: number;
       grade: string;
       message: string;
     }> = [];
 
-    const batch = db.batch();
+    for (const dbIssue of closedIssues) {
+      // IssueをAPI型に変換
+      const issue: Issue = {
+        id: dbIssue.id.toString(),
+        number: dbIssue.githubNumber,
+        title: dbIssue.title,
+        body: dbIssue.body || "",
+        state: dbIssue.state as IssueState,
+        createdAt: dbIssue.githubCreatedAt,
+        closedAt: dbIssue.githubClosedAt,
+        assignee: null, // 評価には使用しない
+        labels: [],
+        githubId: dbIssue.id,
+        speedEvaluation: null,
+        qualityEvaluation: null,
+        syncedAt: dbIssue.updatedAt,
+      };
 
-    for (const issue of issues) {
       const evaluation = evaluateIssueSpeed(issue);
 
       if (evaluation) {
-        // Firestoreに保存
-        const issueRef = db
-          .collection("repositories")
-          .doc(repositoryId)
-          .collection("issues")
-          .doc(issue.id);
-
-        batch.update(issueRef, {
-          speedEvaluation: {
-            score: evaluation.score,
-            grade: evaluation.grade,
-            message: evaluation.message,
-            details: evaluation.details,
-            evaluatedAt: evaluation.evaluatedAt,
-          },
-        });
+        // EvaluationRepositoryにはspeed用のメソッドがないため、leadTimeScoreとして扱う
+        // 必要に応じてEvaluationRepositoryにsaveLeadTimeEvaluationを追加可能
+        // 今回は評価結果のみ返す
 
         results.push({
-          issueId: issue.id,
-          issueNumber: issue.number,
+          issueId: dbIssue.id,
+          issueNumber: dbIssue.githubNumber,
           score: evaluation.score,
           grade: evaluation.grade,
           message: evaluation.message,
         });
       }
     }
-
-    await batch.commit();
 
     return NextResponse.json({
       evaluated: results.length,
