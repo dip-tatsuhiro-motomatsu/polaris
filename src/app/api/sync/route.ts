@@ -71,7 +71,16 @@ export async function POST(request: NextRequest) {
       repository = allRepos[0];
     }
 
-    const { id: repoId, ownerName: owner, repoName: repo, patEncrypted: githubPat } = repository;
+    const { id: repoId, ownerName: owner, repoName: repo } = repository;
+
+    // 環境変数からGitHub PATを取得
+    const githubPat = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+    if (!githubPat) {
+      return NextResponse.json(
+        { error: "GitHub PATが環境変数に設定されていません" },
+        { status: 500 }
+      );
+    }
 
     // SprintCalculatorを使用してスプリント情報を計算
     const sprintCalculator = createSprintCalculator({

@@ -35,7 +35,6 @@ function SettingsContent() {
   // フォーム状態
   const [owner, setOwner] = useState("");
   const [repo, setRepo] = useState("");
-  const [githubPat, setGithubPat] = useState("");
   const [startDayOfWeek, setStartDayOfWeek] = useState<number>(6);
   const [durationWeeks, setDurationWeeks] = useState<1 | 2>(1);
   const [trackedUsers, setTrackedUsers] = useState<string[]>([]);
@@ -59,7 +58,6 @@ function SettingsContent() {
   const resetForm = () => {
     setOwner("");
     setRepo("");
-    setGithubPat("");
     setStartDayOfWeek(6);
     setDurationWeeks(1);
     setTrackedUsers([]);
@@ -72,7 +70,6 @@ function SettingsContent() {
   const startEdit = (repoConfig: RepositoryConfig) => {
     setOwner(repoConfig.owner);
     setRepo(repoConfig.repo);
-    setGithubPat(repoConfig.githubPat);
     setStartDayOfWeek(repoConfig.sprint.startDayOfWeek);
     setDurationWeeks(repoConfig.sprint.durationWeeks);
     setTrackedUsers(repoConfig.trackedUsers || []);
@@ -90,8 +87,8 @@ function SettingsContent() {
 
   // コラボレーター取得
   const fetchCollaborators = async () => {
-    if (!owner || !repo || !githubPat) {
-      setMessage({ type: "error", text: "オーナー、リポジトリ、PATを入力してください" });
+    if (!owner || !repo) {
+      setMessage({ type: "error", text: "オーナーとリポジトリを入力してください" });
       return;
     }
 
@@ -100,7 +97,7 @@ function SettingsContent() {
 
     try {
       const response = await fetch(
-        `/api/settings/collaborators?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&pat=${encodeURIComponent(githubPat)}`
+        `/api/settings/collaborators?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
       );
 
       if (!response.ok) {
@@ -162,8 +159,8 @@ function SettingsContent() {
 
   // 設定保存
   const saveSettings = async () => {
-    if (!owner || !repo || !githubPat) {
-      setMessage({ type: "error", text: "必須項目を入力してください" });
+    if (!owner || !repo) {
+      setMessage({ type: "error", text: "オーナーとリポジトリは必須です" });
       return;
     }
 
@@ -178,7 +175,6 @@ function SettingsContent() {
           id: editingRepoId,
           owner,
           repo,
-          githubPat,
           sprint: {
             startDayOfWeek,
             durationWeeks,
@@ -384,7 +380,7 @@ function SettingsContent() {
         <CardHeader>
           <CardTitle>GitHub設定</CardTitle>
           <CardDescription>
-            対象リポジトリとPersonal Access Tokenを設定
+            対象リポジトリを設定
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -392,7 +388,7 @@ function SettingsContent() {
             <div className="space-y-2">
               <label className="text-sm font-medium">オーナー</label>
               <Input
-                placeholder="posse-ap"
+                placeholder="owner_name"
                 value={owner}
                 onChange={(e) => setOwner(e.target.value)}
               />
@@ -400,24 +396,11 @@ function SettingsContent() {
             <div className="space-y-2">
               <label className="text-sm font-medium">リポジトリ</label>
               <Input
-                placeholder="junior_job_202511"
+                placeholder="repository_name"
                 value={repo}
                 onChange={(e) => setRepo(e.target.value)}
               />
             </div>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Personal Access Token</label>
-            <Input
-              type="password"
-              placeholder="ghp_xxxxxxxxxxxx"
-              value={githubPat}
-              onChange={(e) => setGithubPat(e.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              リポジトリの読み取り権限が必要です
-            </p>
           </div>
         </CardContent>
       </Card>
