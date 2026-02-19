@@ -11,9 +11,6 @@ export interface RepositoryConfig {
   repo: string;
   displayName?: string;
 
-  // GitHub PAT（このリポジトリ用）
-  githubPat: string;
-
   // スプリント設定
   sprint: {
     startDayOfWeek: number; // 0-6 (0:日曜, 6:土曜)

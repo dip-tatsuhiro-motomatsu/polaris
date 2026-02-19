@@ -67,10 +67,11 @@ export async function POST(request: NextRequest) {
       const result = await runQualityBatch(repoId, maxLimit);
       return NextResponse.json(result);
     } else {
-      if (!repository.patEncrypted) {
+      const githubPat = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+      if (!githubPat) {
         return NextResponse.json(
-          { error: "GitHub PAT not configured for this repository" },
-          { status: 400 }
+          { error: "GitHub PATが環境変数に設定されていません" },
+          { status: 500 }
         );
       }
       const result = await runConsistencyBatch(
@@ -78,7 +79,7 @@ export async function POST(request: NextRequest) {
           id: repository.id,
           ownerName: repository.ownerName,
           repoName: repository.repoName,
-          patEncrypted: repository.patEncrypted,
+          githubPat,
         },
         maxLimit
       );
@@ -163,11 +164,11 @@ async function runQualityBatch(
 }
 
 async function runConsistencyBatch(
-  repository: { id: number; ownerName: string; repoName: string; patEncrypted: string },
+  repository: { id: number; ownerName: string; repoName: string; githubPat: string },
   limit: number
 ): Promise<{ evaluated: number; errors: number; skipped: number; remaining: number }> {
   const repositoryId = repository.id;
-  const octokit = new Octokit({ auth: repository.patEncrypted });
+  const octokit = new Octokit({ auth: repository.githubPat });
 
   const allIssues = await issueRepo.findByRepositoryId(repositoryId);
   const closedIssues = allIssues.filter((issue) => issue.state === "closed");
