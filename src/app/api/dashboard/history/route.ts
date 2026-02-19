@@ -97,7 +97,6 @@ interface IssueWithEvaluation {
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
-    const sprintCount = parseInt(searchParams.get("count") || "12", 10);
     const repoIdParam = searchParams.get("repoId");
 
     // リポジトリを取得
