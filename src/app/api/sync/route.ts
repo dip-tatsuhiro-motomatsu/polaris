@@ -2,16 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { Octokit } from "@octokit/rest";
 import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
 import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
+import { PullRequestRepository } from "@/infrastructure/repositories/pull-request-repository";
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
 import { SyncMetadataRepository } from "@/infrastructure/repositories/sync-metadata-repository";
 import { EvaluationRepository } from "@/infrastructure/repositories/evaluation-repository";
 import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
-import type { NewIssue } from "@/infrastructure/database/schema";
+import { calculateCompletionHours, evaluateByHours } from "@/lib/evaluation/speed";
+import { getLinkedIssuesForPR } from "@/lib/github/client";
+import type { NewIssue, NewPullRequest } from "@/infrastructure/database/schema";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const repositoryRepo = new RepositoryRepository();
 const issueRepo = new IssueRepository();
+const prRepo = new PullRequestRepository();
 const collaboratorRepo = new CollaboratorRepository();
 const syncMetadataRepo = new SyncMetadataRepository();
 const evaluationRepo = new EvaluationRepository();
@@ -121,6 +126,7 @@ export async function POST(request: NextRequest) {
 
     // 同期統計
     let syncedCount = 0;
+    let syncedPrCount = 0;
     let skippedCount = 0;
 
     if (needsFullSync) {
@@ -176,6 +182,59 @@ export async function POST(request: NextRequest) {
         if (issues.length < perPage) break;
         page++;
       }
+
+      // Full sync: PR取得
+      let prPage = 1;
+      while (true) {
+        const { data: prs } = await octokit.rest.pulls.list({
+          owner,
+          repo,
+          state: "all",
+          per_page: perPage,
+          page: prPage,
+          sort: "updated",
+          direction: "desc",
+        });
+
+        if (prs.length === 0) break;
+
+        for (const pr of prs) {
+          const author = pr.user?.login || "unknown";
+          if (trackedUserNames.length > 0 && !trackedUserNames.includes(author)) {
+            continue;
+          }
+
+          const authorId = await getOrCreateCollaboratorId(author);
+
+          // リンクされたIssueを検索（PR bodyから #123 形式を抽出）
+          let linkedIssueId: number | null = null;
+          if (pr.body) {
+            const issueMatch = pr.body.match(/#(\d+)/);
+            if (issueMatch) {
+              const issueNumber = parseInt(issueMatch[1], 10);
+              const linkedIssue = await issueRepo.findByGithubNumber(repoId, issueNumber);
+              linkedIssueId = linkedIssue?.id || null;
+            }
+          }
+
+          const prData: NewPullRequest = {
+            repositoryId: repoId,
+            githubNumber: pr.number,
+            title: pr.title,
+            state: pr.merged_at ? "merged" : pr.state,
+            authorCollaboratorId: authorId,
+            issueId: linkedIssueId,
+            githubCreatedAt: new Date(pr.created_at),
+            githubMergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
+          };
+
+          await prRepo.upsert(prData);
+          syncedPrCount++;
+        }
+
+        if (prs.length < perPage) break;
+        prPage++;
+      }
     } else {
       console.log(`Incremental sync for sprint ${currentSprintNumber}`);
 
@@ -230,13 +289,104 @@ export async function POST(request: NextRequest) {
         if (issues.length < perPage) break;
         page++;
       }
+
+      // Incremental sync: PR取得
+      // PRは初回同期も含めて全件取得する（PRの数はIssueより少ないため）
+      let prPage = 1;
+      console.log(`PR sync started. trackedUserNames: ${JSON.stringify(trackedUserNames)}`);
+
+      while (true) {
+        const { data: prs } = await octokit.rest.pulls.list({
+          owner,
+          repo,
+          state: "all",
+          per_page: perPage,
+          page: prPage,
+          sort: "updated",
+          direction: "desc",
+        });
+
+        console.log(`PR page ${prPage}: fetched ${prs.length} PRs`);
+        if (prs.length === 0) break;
+
+        for (const pr of prs) {
+          const author = pr.user?.login || "unknown";
+          console.log(`PR #${pr.number} by ${author}`);
+
+          if (trackedUserNames.length > 0 && !trackedUserNames.includes(author)) {
+            console.log(`  -> Skipped: author not in trackedUserNames`);
+            continue;
+          }
+
+          const authorId = await getOrCreateCollaboratorId(author);
+
+          // 1. GraphQL APIでlinked issuesを取得（優先：UIでリンクされたIssue）
+          let linkedIssueId: number | null = null;
+          try {
+            const linkedIssueNumbers = await getLinkedIssuesForPR(owner, repo, pr.number);
+            if (linkedIssueNumbers.length > 0) {
+              const linkedIssue = await issueRepo.findByGithubNumber(repoId, linkedIssueNumbers[0]);
+              linkedIssueId = linkedIssue?.id || null;
+            }
+          } catch {
+            // GraphQL失敗時は無視（フォールバックへ）
+          }
+
+          // 2. フォールバック: PR本文から #N を抽出
+          if (!linkedIssueId && pr.body) {
+            const issueMatch = pr.body.match(/#(\d+)/);
+            if (issueMatch) {
+              const issueNumber = parseInt(issueMatch[1], 10);
+              const linkedIssue = await issueRepo.findByGithubNumber(repoId, issueNumber);
+              linkedIssueId = linkedIssue?.id || null;
+            }
+          }
+
+          const prData: NewPullRequest = {
+            repositoryId: repoId,
+            githubNumber: pr.number,
+            title: pr.title,
+            state: pr.merged_at ? "merged" : pr.state,
+            authorCollaboratorId: authorId,
+            issueId: linkedIssueId,
+            githubCreatedAt: new Date(pr.created_at),
+            githubMergedAt: pr.merged_at ? new Date(pr.merged_at) : null,
+          };
+
+          await prRepo.upsert(prData);
+          syncedPrCount++;
+        }
+
+        if (prs.length < perPage) break;
+        prPage++;
+      }
     }
 
     // 同期メタデータを更新
     await syncMetadataRepo.upsert(repoId, new Date());
 
-    // 未評価件数をカウント
+    // リードタイム評価を計算・保存（クローズ済みで未評価のIssueのみ）
     const allIssues = await issueRepo.findByRepositoryId(repoId);
+    let leadTimeEvaluatedCount = 0;
+
+    for (const issue of allIssues) {
+      if (issue.state === "closed" && issue.githubClosedAt) {
+        const existingEval = await evaluationRepo.findByIssueId(issue.id);
+        if (!existingEval || existingEval.leadTimeScore === null) {
+          const hours = calculateCompletionHours(issue.githubCreatedAt, issue.githubClosedAt);
+          const speedResult = evaluateByHours(hours);
+          await evaluationRepo.saveLeadTimeEvaluation({
+            issueId: issue.id,
+            score: speedResult.score,
+            grade: speedResult.grade,
+          });
+          leadTimeEvaluatedCount++;
+        }
+      }
+    }
+    console.log(`Lead time evaluated: ${leadTimeEvaluatedCount} issues`);
+
+    // 未評価件数をカウント
     let unevaluatedQualityCount = 0;
     let unevaluatedConsistencyCount = 0;
 
@@ -256,7 +406,9 @@ export async function POST(request: NextRequest) {
       currentSprintNumber,
       stats: {
         synced: syncedCount,
+        syncedPrs: syncedPrCount,
         skipped: skippedCount,
+        leadTimeEvaluated: leadTimeEvaluatedCount,
       },
       pendingEvaluations: {
         quality: unevaluatedQualityCount,

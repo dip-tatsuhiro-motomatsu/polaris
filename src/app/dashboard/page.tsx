@@ -923,22 +923,11 @@ export default function DashboardPage() {
 
       {/* 同期・評価メッセージ */}
       {(syncMessage || evaluationProgress) && (
-        <div className="bg-blue-500/10 text-blue-700 p-3 rounded-md text-sm space-y-2">
+        <div className="bg-blue-500/10 text-blue-700 p-3 rounded-md text-sm">
           {syncMessage && <div>{syncMessage}</div>}
           {evaluationProgress && (
-            <div className="space-y-1">
-              <div className="flex justify-between text-xs">
-                <span>
-                  {evaluationProgress.type === "quality" ? "品質評価" : "整合性評価"}
-                </span>
-                <span>
-                  {evaluationProgress.evaluated} / {evaluationProgress.total} 件完了
-                </span>
-              </div>
-              <Progress
-                value={(evaluationProgress.evaluated / evaluationProgress.total) * 100}
-                className="h-2"
-              />
+            <div>
+              {evaluationProgress.type === "quality" ? "品質評価" : "整合性評価"}を実行中...
             </div>
           )}
         </div>
