@@ -656,6 +656,78 @@ export default function DashboardPage() {
   const [sprintOffset, setSprintOffset] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [evaluationProgress, setEvaluationProgress] = useState<{
+    type: "quality" | "consistency" | null;
+    evaluated: number;
+    remaining: number;
+    total: number;
+  } | null>(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+
+  // バッチ評価を実行する関数
+  const runBatchEvaluation = useCallback(async (
+    type: "quality" | "consistency",
+    initialRemaining: number
+  ) => {
+    if (!selectedRepository) return;
+
+    const total = initialRemaining;
+    let totalEvaluated = 0;
+    let remaining = initialRemaining;
+
+    setIsEvaluating(true);
+    setEvaluationProgress({ type, evaluated: 0, remaining, total });
+
+    while (remaining > 0) {
+      try {
+        const response = await fetch("/api/evaluations/batch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            repoId: selectedRepository.id,
+            type,
+            limit: 5, // Vercelタイムアウトに収まるよう少なめに
+          }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          console.error("Batch evaluation error:", error);
+          break;
+        }
+
+        const result = await response.json();
+        totalEvaluated += result.evaluated;
+        remaining = result.remaining;
+
+        setEvaluationProgress({
+          type,
+          evaluated: totalEvaluated,
+          remaining,
+          total,
+        });
+
+        // レート制限に引っかかった場合は停止
+        if (result.errors > 0) {
+          console.log("Errors occurred, stopping batch");
+          break;
+        }
+
+        // 評価した件数が0なら終了（全て完了）
+        if (result.evaluated === 0) {
+          break;
+        }
+      } catch (err) {
+        console.error("Batch evaluation failed:", err);
+        break;
+      }
+    }
+
+    setIsEvaluating(false);
+    setEvaluationProgress(null);
+
+    return totalEvaluated;
+  }, [selectedRepository]);
 
   const fetchData = useCallback(async (skipSync = false) => {
     if (!selectedRepository) {
@@ -709,13 +781,37 @@ export default function DashboardPage() {
       }
 
       setSyncMessage(`同期完了: ${result.stats.synced}件更新`);
+      setIsSyncing(false);
+
       // データを再取得（同期スキップ）
       await fetchData(true);
+
+      // 未評価のIssueがあればバッチ評価を開始
+      const pendingEvaluations = result.pendingEvaluations;
+      if (pendingEvaluations) {
+        // 品質評価を先に実行
+        if (pendingEvaluations.quality > 0) {
+          setSyncMessage(`品質評価を実行中... (${pendingEvaluations.quality}件)`);
+          await runBatchEvaluation("quality", pendingEvaluations.quality);
+          await fetchData(true);
+        }
+
+        // 次に整合性評価を実行
+        if (pendingEvaluations.consistency > 0) {
+          setSyncMessage(`整合性評価を実行中... (${pendingEvaluations.consistency}件)`);
+          await runBatchEvaluation("consistency", pendingEvaluations.consistency);
+          await fetchData(true);
+        }
+
+        if (pendingEvaluations.quality > 0 || pendingEvaluations.consistency > 0) {
+          setSyncMessage("評価完了");
+        }
+      }
     } catch (err) {
       console.error("Sync error:", err);
       setSyncMessage(err instanceof Error ? err.message : "同期エラー");
-    } finally {
       setIsSyncing(false);
+    } finally {
       // 3秒後にメッセージをクリア
       setTimeout(() => setSyncMessage(null), 3000);
     }
@@ -796,9 +892,9 @@ export default function DashboardPage() {
               variant="outline"
               size="sm"
               onClick={handleSync}
-              disabled={isSyncing}
+              disabled={isSyncing || isEvaluating}
             >
-              {isSyncing ? "同期中..." : "GitHub同期"}
+              {isSyncing ? "同期中..." : isEvaluating ? "評価中..." : "GitHub同期"}
             </Button>
             {data.lastSyncAt && (
               <span className="text-xs text-muted-foreground">
@@ -825,10 +921,26 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* 同期メッセージ */}
-      {syncMessage && (
-        <div className="bg-blue-500/10 text-blue-700 p-3 rounded-md text-sm">
-          {syncMessage}
+      {/* 同期・評価メッセージ */}
+      {(syncMessage || evaluationProgress) && (
+        <div className="bg-blue-500/10 text-blue-700 p-3 rounded-md text-sm space-y-2">
+          {syncMessage && <div>{syncMessage}</div>}
+          {evaluationProgress && (
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs">
+                <span>
+                  {evaluationProgress.type === "quality" ? "品質評価" : "整合性評価"}
+                </span>
+                <span>
+                  {evaluationProgress.evaluated} / {evaluationProgress.total} 件完了
+                </span>
+              </div>
+              <Progress
+                value={(evaluationProgress.evaluated / evaluationProgress.total) * 100}
+                className="h-2"
+              />
+            </div>
+          )}
         </div>
       )}
 

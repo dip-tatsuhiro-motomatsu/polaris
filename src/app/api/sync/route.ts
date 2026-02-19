@@ -5,11 +5,8 @@ import { IssueRepository } from "@/infrastructure/repositories/issue-repository"
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
 import { SyncMetadataRepository } from "@/infrastructure/repositories/sync-metadata-repository";
 import { EvaluationRepository } from "@/infrastructure/repositories/evaluation-repository";
-import { evaluateIssueQuality } from "@/lib/evaluation/quality";
-import { evaluateConsistency } from "@/lib/evaluation/consistency";
-import { getLinkedPRsForIssue } from "@/lib/github/linked-prs";
 import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
-import type { NewIssue, Issue, Evaluation } from "@/infrastructure/database/schema";
+import type { NewIssue } from "@/infrastructure/database/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -33,181 +30,6 @@ function createSprintCalculator(repository: {
       : new Date(),
   };
   return new SprintCalculator(config);
-}
-
-// 遅延関数
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// 品質評価を実行する関数
-async function runQualityEvaluation(
-  repositoryId: number,
-  options: { maxEvaluations?: number; delayMs?: number } = {}
-): Promise<{ evaluated: number; errors: number; total: number }> {
-  const { maxEvaluations, delayMs = 1000 } = options;
-
-  // 品質評価がまだされていないIssueを取得
-  const allIssues = await issueRepo.findByRepositoryId(repositoryId);
-
-  // 評価データを取得して、未評価のIssueをフィルタ
-  const unevaluatedIssues: { issue: Issue; evaluation: Evaluation | null }[] = [];
-
-  for (const issue of allIssues) {
-    const evaluation = await evaluationRepo.findByIssueId(issue.id);
-    if (!evaluation || evaluation.qualityScore === null) {
-      unevaluatedIssues.push({ issue, evaluation });
-    }
-  }
-
-  const total = maxEvaluations
-    ? Math.min(unevaluatedIssues.length, maxEvaluations)
-    : unevaluatedIssues.length;
-
-  console.log(`Found ${total} issues to evaluate for quality`);
-
-  let evaluated = 0;
-  let errors = 0;
-
-  const issuesToEvaluate = unevaluatedIssues.slice(0, total);
-
-  for (const { issue } of issuesToEvaluate) {
-    try {
-      console.log(`Evaluating issue #${issue.githubNumber}: ${issue.title} (${evaluated + 1}/${total})`);
-
-      // assigneeの名前を取得
-      let assigneeName: string | null = null;
-      if (issue.assigneeCollaboratorId) {
-        const assignee = await collaboratorRepo.findById(issue.assigneeCollaboratorId);
-        assigneeName = assignee?.githubUserName || null;
-      }
-
-      const qualityResult = await evaluateIssueQuality({
-        number: issue.githubNumber,
-        title: issue.title,
-        body: issue.body,
-        assignee: assigneeName,
-      });
-
-      await evaluationRepo.saveQualityEvaluation({
-        issueId: issue.id,
-        score: qualityResult.totalScore,
-        grade: qualityResult.grade,
-        details: {
-          categories: qualityResult.categories,
-          overallFeedback: qualityResult.overallFeedback,
-          improvementSuggestions: qualityResult.improvementSuggestions,
-        },
-      });
-
-      evaluated++;
-      console.log(`Issue #${issue.githubNumber} evaluated: ${qualityResult.grade} (${qualityResult.totalScore}点)`);
-
-      if (evaluated < total) {
-        await delay(delayMs);
-      }
-    } catch (error: unknown) {
-      console.error(`Failed to evaluate issue #${issue.githubNumber}:`, error);
-      errors++;
-
-      if (error instanceof Error && error.message?.includes("429")) {
-        console.log("Rate limit hit, waiting 60 seconds...");
-        await delay(60000);
-      }
-    }
-  }
-
-  return { evaluated, errors, total };
-}
-
-// PR整合性評価を実行する関数
-async function runConsistencyEvaluation(
-  repositoryId: number,
-  octokit: Octokit,
-  owner: string,
-  repo: string,
-  options: { maxEvaluations?: number; delayMs?: number } = {}
-): Promise<{ evaluated: number; errors: number; skipped: number; total: number }> {
-  const { maxEvaluations, delayMs = 2000 } = options;
-
-  // クローズ済みで整合性評価がまだされていないIssueを取得
-  const allIssues = await issueRepo.findByRepositoryId(repositoryId);
-  const closedIssues = allIssues.filter((issue) => issue.state === "closed");
-
-  const unevaluatedIssues: Issue[] = [];
-
-  for (const issue of closedIssues) {
-    const evaluation = await evaluationRepo.findByIssueId(issue.id);
-    if (!evaluation || evaluation.consistencyScore === null) {
-      unevaluatedIssues.push(issue);
-    }
-  }
-
-  const total = maxEvaluations
-    ? Math.min(unevaluatedIssues.length, maxEvaluations)
-    : unevaluatedIssues.length;
-
-  console.log(`Found ${total} closed issues to evaluate for PR consistency`);
-
-  let evaluated = 0;
-  let errors = 0;
-  let skipped = 0;
-
-  const issuesToEvaluate = unevaluatedIssues.slice(0, total);
-
-  for (const issue of issuesToEvaluate) {
-    try {
-      console.log(`Checking linked PRs for issue #${issue.githubNumber}: ${issue.title} (${evaluated + skipped + 1}/${total})`);
-
-      const linkedPRs = await getLinkedPRsForIssue(octokit, owner, repo, issue.githubNumber);
-
-      if (linkedPRs.length === 0) {
-        console.log(`Issue #${issue.githubNumber} has no linked PRs, skipping`);
-        skipped++;
-        continue;
-      }
-
-      console.log(`Evaluating consistency for issue #${issue.githubNumber} with ${linkedPRs.length} linked PR(s)`);
-
-      const consistencyResult = await evaluateConsistency(
-        {
-          number: issue.githubNumber,
-          title: issue.title,
-          body: issue.body,
-        },
-        linkedPRs
-      );
-
-      await evaluationRepo.saveConsistencyEvaluation({
-        issueId: issue.id,
-        score: consistencyResult.totalScore,
-        grade: consistencyResult.grade,
-        details: {
-          linkedPRs: consistencyResult.linkedPRs,
-          categories: consistencyResult.categories,
-          overallFeedback: consistencyResult.overallFeedback,
-          issueImprovementSuggestions: consistencyResult.issueImprovementSuggestions,
-        },
-      });
-
-      evaluated++;
-      console.log(`Issue #${issue.githubNumber} consistency evaluated: ${consistencyResult.grade} (${consistencyResult.totalScore}点)`);
-
-      if (evaluated + skipped < total) {
-        await delay(delayMs);
-      }
-    } catch (error: unknown) {
-      console.error(`Failed to evaluate consistency for issue #${issue.githubNumber}:`, error);
-      errors++;
-
-      if (error instanceof Error && error.message?.includes("429")) {
-        console.log("Rate limit hit, waiting 60 seconds...");
-        await delay(60000);
-      }
-    }
-  }
-
-  return { evaluated, errors, skipped, total };
 }
 
 export async function POST(request: NextRequest) {
@@ -404,30 +226,19 @@ export async function POST(request: NextRequest) {
     // 同期メタデータを更新
     await syncMetadataRepo.upsert(repoId, new Date());
 
-    // 品質評価を実行（GEMINI_API_KEYが設定されている場合のみ）
-    let qualityEvaluationStats = { evaluated: 0, errors: 0, total: 0 };
-    let consistencyEvaluationStats = { evaluated: 0, errors: 0, skipped: 0, total: 0 };
+    // 未評価件数をカウント
+    const allIssues = await issueRepo.findByRepositoryId(repoId);
+    let unevaluatedQualityCount = 0;
+    let unevaluatedConsistencyCount = 0;
 
-    if (process.env.GEMINI_API_KEY) {
-      try {
-        qualityEvaluationStats = await runQualityEvaluation(repoId, { delayMs: 1000 });
-      } catch (error) {
-        console.error("Quality evaluation error:", error);
+    for (const issue of allIssues) {
+      const evaluation = await evaluationRepo.findByIssueId(issue.id);
+      if (!evaluation || evaluation.qualityScore === null) {
+        unevaluatedQualityCount++;
       }
-
-      try {
-        consistencyEvaluationStats = await runConsistencyEvaluation(
-          repoId,
-          octokit,
-          owner,
-          repo,
-          { delayMs: 2000 }
-        );
-      } catch (error) {
-        console.error("Consistency evaluation error:", error);
+      if (issue.state === "closed" && (!evaluation || evaluation.consistencyScore === null)) {
+        unevaluatedConsistencyCount++;
       }
-    } else {
-      console.log("GEMINI_API_KEY is not set, skipping AI evaluations");
     }
 
     return NextResponse.json({
@@ -437,13 +248,10 @@ export async function POST(request: NextRequest) {
       stats: {
         synced: syncedCount,
         skipped: skippedCount,
-        qualityTotal: qualityEvaluationStats.total,
-        qualityEvaluated: qualityEvaluationStats.evaluated,
-        qualityErrors: qualityEvaluationStats.errors,
-        consistencyTotal: consistencyEvaluationStats.total,
-        consistencyEvaluated: consistencyEvaluationStats.evaluated,
-        consistencySkipped: consistencyEvaluationStats.skipped,
-        consistencyErrors: consistencyEvaluationStats.errors,
+      },
+      pendingEvaluations: {
+        quality: unevaluatedQualityCount,
+        consistency: unevaluatedConsistencyCount,
       },
     });
   } catch (error) {
