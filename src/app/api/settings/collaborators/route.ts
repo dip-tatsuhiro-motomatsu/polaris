@@ -13,12 +13,19 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const owner = searchParams.get("owner");
     const repo = searchParams.get("repo");
-    const pat = searchParams.get("pat");
 
-    if (!owner || !repo || !pat) {
+    if (!owner || !repo) {
       return NextResponse.json(
-        { error: "owner, repo, pat は必須です" },
+        { error: "owner, repo は必須です" },
         { status: 400 }
+      );
+    }
+
+    const pat = process.env.GITHUB_PERSONAL_ACCESS_TOKEN;
+    if (!pat) {
+      return NextResponse.json(
+        { error: "GitHub PATが環境変数に設定されていません" },
+        { status: 500 }
       );
     }
 

@@ -14,6 +14,7 @@ export const evaluations = pgTable("evaluations", {
 
   // リードタイム評価
   leadTimeScore: integer("lead_time_score"),
+  leadTimeGrade: text("lead_time_grade"), // A, B, C, D, E
   leadTimeCalculatedAt: timestamp("lead_time_calculated_at", { withTimezone: true }),
 
   // Issue品質評価

@@ -100,9 +100,10 @@ export class IssueRepository {
 
   /**
    * リポジトリIDでIssue一覧を取得する
+   * 注: bigintカラムとの比較のため生SQLで比較
    */
   async findByRepositoryId(repositoryId: number): Promise<Issue[]> {
-    return db.select().from(issues).where(eq(issues.repositoryId, repositoryId));
+    return db.select().from(issues).where(sql`"repository_id" = ${repositoryId}`);
   }
 
   /**
@@ -165,16 +166,18 @@ export class IssueRepository {
 
   /**
    * リポジトリIDで全てのIssueを削除する
+   * 注: bigintカラムとの比較のため生SQLで比較
    */
   async deleteByRepositoryId(repositoryId: number): Promise<number> {
     const result = await db
       .delete(issues)
-      .where(eq(issues.repositoryId, repositoryId));
+      .where(sql`"repository_id" = ${repositoryId}`);
     return result.rowCount ?? 0;
   }
 
   /**
    * リポジトリIDでIssue一覧を取得する（評価データ付き、フィルタリング対応）
+   * 注: bigintカラムとの比較のため生SQLで比較
    */
   async findByRepositoryIdWithEvaluations(
     repositoryId: number,
@@ -182,8 +185,8 @@ export class IssueRepository {
   ): Promise<{ issues: IssueWithEvaluation[]; total: number }> {
     const { state = "all", sprintStart, sprintEnd, limit = 50, offset = 0 } = options;
 
-    // 条件を構築
-    const conditions = [eq(issues.repositoryId, repositoryId)];
+    // 条件を構築（bigintカラムは生SQLで比較）
+    const conditions = [sql`"repository_id" = ${repositoryId}`];
 
     if (state !== "all") {
       conditions.push(eq(issues.state, state));

@@ -27,7 +27,6 @@ export async function GET() {
           owner: repo.ownerName,
           repo: repo.repoName,
           displayName: `${repo.ownerName}/${repo.repoName}`,
-          githubPat: repo.patEncrypted || "",
           sprint: {
             startDayOfWeek: repo.sprintStartDayOfWeek,
             durationWeeks: repo.sprintDurationWeeks,
@@ -62,7 +61,6 @@ export async function POST(request: NextRequest) {
       id,
       owner,
       repo,
-      githubPat,
       sprint,
       trackedUsers,
     } = body;
@@ -70,13 +68,6 @@ export async function POST(request: NextRequest) {
     if (!owner || !repo) {
       return NextResponse.json(
         { error: "owner と repo は必須です" },
-        { status: 400 }
-      );
-    }
-
-    if (!githubPat) {
-      return NextResponse.json(
-        { error: "GitHub Personal Access Token は必須です" },
         { status: 400 }
       );
     }
@@ -104,7 +95,6 @@ export async function POST(request: NextRequest) {
       await repositoryRepo.update(numericId, {
         ownerName: owner,
         repoName: repo,
-        patEncrypted: githubPat,
         sprintStartDayOfWeek: sprint?.startDayOfWeek ?? 6,
         sprintDurationWeeks: sprint?.durationWeeks ?? 1,
         trackingStartDate: sprint?.baseDate || null,
@@ -116,7 +106,6 @@ export async function POST(request: NextRequest) {
       const newRepoData: NewRepository = {
         ownerName: owner,
         repoName: repo,
-        patEncrypted: githubPat,
         sprintStartDayOfWeek: sprint?.startDayOfWeek ?? 6,
         sprintDurationWeeks: sprint?.durationWeeks ?? 1,
         trackingStartDate: sprint?.baseDate || null,
