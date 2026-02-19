@@ -95,7 +95,7 @@ export async function POST(request: NextRequest) {
     });
     const now = new Date();
     const currentSprint = sprintCalculator.getCurrentSprint(now);
-    const currentSprintNumber = currentSprint.number.value;
+    let currentSprintNumber = currentSprint.number.value;
 
     // 同期メタデータを取得
     const syncMeta = await syncMetadataRepo.findByRepositoryId(repoId);
@@ -235,6 +235,42 @@ export async function POST(request: NextRequest) {
         if (prs.length < perPage) break;
         prPage++;
       }
+
+      // trackingStartDateが未設定の場合、追跡ユーザーの最古Issue作成日を自動設定
+      if (!repository.trackingStartDate && syncedCount > 0) {
+        const allSyncedIssues = await issueRepo.findByRepositoryId(repoId);
+        let oldestDate: Date | null = null;
+
+        for (const issue of allSyncedIssues) {
+          if (!oldestDate || issue.githubCreatedAt < oldestDate) {
+            oldestDate = issue.githubCreatedAt;
+          }
+        }
+
+        if (oldestDate) {
+          // trackingStartDateを更新（日付文字列 "YYYY-MM-DD" 形式）
+          const dateString = oldestDate.toISOString().split("T")[0];
+          await repositoryRepo.update(repoId, { trackingStartDate: dateString });
+
+          // SprintCalculatorを新しい基準日で再作成
+          const newSprintCalculator = createSprintCalculator({
+            sprintStartDayOfWeek: repository.sprintStartDayOfWeek ?? 6,
+            sprintDurationWeeks: repository.sprintDurationWeeks,
+            trackingStartDate: dateString,
+          });
+
+          // 全Issueのスプリント番号を再計算
+          for (const issue of allSyncedIssues) {
+            const newSprintNumber = newSprintCalculator.calculateIssueSprintNumber(issue.githubCreatedAt).value;
+            await issueRepo.update(issue.id, { sprintNumber: newSprintNumber });
+          }
+
+          // 現在のスプリント番号も更新
+          currentSprintNumber = newSprintCalculator.calculateSprintNumber(now).value;
+
+          console.log(`Auto-detected trackingStartDate: ${dateString}`);
+        }
+      }
     } else {
       console.log(`Incremental sync for sprint ${currentSprintNumber}`);
 
@@ -359,6 +395,42 @@ export async function POST(request: NextRequest) {
 
         if (prs.length < perPage) break;
         prPage++;
+      }
+
+      // trackingStartDateが未設定の場合、追跡ユーザーの最古Issue作成日を自動設定
+      if (!repository.trackingStartDate && syncedCount > 0) {
+        const allSyncedIssues = await issueRepo.findByRepositoryId(repoId);
+        let oldestDate: Date | null = null;
+
+        for (const issue of allSyncedIssues) {
+          if (!oldestDate || issue.githubCreatedAt < oldestDate) {
+            oldestDate = issue.githubCreatedAt;
+          }
+        }
+
+        if (oldestDate) {
+          // trackingStartDateを更新（日付文字列 "YYYY-MM-DD" 形式）
+          const dateString = oldestDate.toISOString().split("T")[0];
+          await repositoryRepo.update(repoId, { trackingStartDate: dateString });
+
+          // SprintCalculatorを新しい基準日で再作成
+          const newSprintCalculator = createSprintCalculator({
+            sprintStartDayOfWeek: repository.sprintStartDayOfWeek ?? 6,
+            sprintDurationWeeks: repository.sprintDurationWeeks,
+            trackingStartDate: dateString,
+          });
+
+          // 全Issueのスプリント番号を再計算
+          for (const issue of allSyncedIssues) {
+            const newSprintNumber = newSprintCalculator.calculateIssueSprintNumber(issue.githubCreatedAt).value;
+            await issueRepo.update(issue.id, { sprintNumber: newSprintNumber });
+          }
+
+          // 現在のスプリント番号も更新
+          currentSprintNumber = newSprintCalculator.calculateSprintNumber(now).value;
+
+          console.log(`Auto-detected trackingStartDate: ${dateString}`);
+        }
       }
     }
 

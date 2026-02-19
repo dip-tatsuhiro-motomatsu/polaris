@@ -411,7 +411,7 @@ export default function HistoryPage() {
                     <LineChart data={scoreData}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="name" fontSize={12} />
-                      <YAxis domain={[0, 120]} fontSize={12} />
+                      <YAxis domain={[0, 100]} fontSize={12} />
                       <Tooltip
                         labelFormatter={(label) => {
                           const item = scoreData.find((d) => d.name === label);
