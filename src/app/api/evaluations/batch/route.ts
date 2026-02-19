@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { Octokit } from "@octokit/rest";
 import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
 import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
+import { PullRequestRepository } from "@/infrastructure/repositories/pull-request-repository";
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
 import { EvaluationRepository } from "@/infrastructure/repositories/evaluation-repository";
 import { evaluateIssueQuality } from "@/lib/evaluation/quality";
 import { evaluateConsistency } from "@/lib/evaluation/consistency";
-import { getLinkedPRsForIssue } from "@/lib/github/linked-prs";
+import { getLinkedPRsForIssue, getPRDetails } from "@/lib/github/linked-prs";
 import type { Issue, Evaluation } from "@/infrastructure/database/schema";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +15,7 @@ export const maxDuration = 60;
 
 const repositoryRepo = new RepositoryRepository();
 const issueRepo = new IssueRepository();
+const prRepo = new PullRequestRepository();
 const collaboratorRepo = new CollaboratorRepository();
 const evaluationRepo = new EvaluationRepository();
 
@@ -193,12 +195,40 @@ async function runConsistencyBatch(
     try {
       console.log(`[Batch] Checking linked PRs for issue #${issue.githubNumber}: ${issue.title}`);
 
-      const linkedPRs = await getLinkedPRsForIssue(
-        octokit,
-        repository.ownerName,
-        repository.repoName,
-        issue.githubNumber
-      );
+      // 1. PRテーブルからissueIdでリンクされたPRを検索（優先）
+      const dbLinkedPRs = await prRepo.findByIssueId(issue.id);
+      let linkedPRs: Awaited<ReturnType<typeof getLinkedPRsForIssue>> = [];
+
+      if (dbLinkedPRs.length > 0) {
+        console.log(`[Batch] Found ${dbLinkedPRs.length} linked PR(s) in database`);
+        // DBのPRデータからAPI形式に変換（getPRDetailsを使用）
+        for (const dbPr of dbLinkedPRs) {
+          try {
+            const prDetails = await getPRDetails(
+              octokit,
+              repository.ownerName,
+              repository.repoName,
+              dbPr.githubNumber
+            );
+            if (prDetails) {
+              linkedPRs.push(prDetails);
+            }
+          } catch (err) {
+            console.log(`[Batch] Failed to get PR #${dbPr.githubNumber} details:`, err);
+          }
+        }
+      }
+
+      // 2. フォールバック: GitHub APIでlinked PRsを検索
+      if (linkedPRs.length === 0) {
+        console.log(`[Batch] No linked PRs in database, falling back to GitHub API`);
+        linkedPRs = await getLinkedPRsForIssue(
+          octokit,
+          repository.ownerName,
+          repository.repoName,
+          issue.githubNumber
+        );
+      }
 
       if (linkedPRs.length === 0) {
         console.log(`[Batch] Issue #${issue.githubNumber} has no linked PRs, skipping`);

@@ -183,3 +183,53 @@ export async function getIssuesDateRange(owner: string, repo: string) {
     totalIssues: oldestResponse.data.length > 0 ? "1+" : "0",
   };
 }
+
+/**
+ * GraphQL APIでPRにリンクされたIssue番号を取得
+ * GitHub UI（サイドバー）でリンクされたIssueを含む
+ * @param owner - リポジトリオーナー
+ * @param repo - リポジトリ名
+ * @param prNumber - PR番号
+ * @returns リンクされたIssue番号の配列
+ */
+export async function getLinkedIssuesForPR(
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<number[]> {
+  const octokit = getOctokit();
+
+  const query = `
+    query($owner: String!, $repo: String!, $pr: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $pr) {
+          closingIssuesReferences(first: 10) {
+            nodes {
+              number
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  interface GraphQLResponse {
+    repository: {
+      pullRequest: {
+        closingIssuesReferences: {
+          nodes: Array<{ number: number }>;
+        };
+      };
+    };
+  }
+
+  const result = await octokit.graphql<GraphQLResponse>(query, {
+    owner,
+    repo,
+    pr: prNumber,
+  });
+
+  return result.repository.pullRequest.closingIssuesReferences.nodes.map(
+    (node) => node.number
+  );
+}

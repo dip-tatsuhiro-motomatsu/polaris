@@ -78,7 +78,7 @@ export async function getLinkedPRsForIssue(
 /**
  * PRの詳細情報を取得（diff含む）
  */
-async function getPRDetails(
+export async function getPRDetails(
   octokit: Octokit,
   owner: string,
   repo: string,

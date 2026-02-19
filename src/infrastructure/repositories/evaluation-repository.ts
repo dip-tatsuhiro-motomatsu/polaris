@@ -25,6 +25,12 @@ export interface SaveConsistencyEvaluationInput {
   details: ConsistencyDetails;
 }
 
+export interface SaveLeadTimeEvaluationInput {
+  issueId: number;
+  score: number;
+  grade: string;
+}
+
 export class EvaluationRepository {
   /**
    * 評価レコードを作成または取得する
@@ -81,6 +87,26 @@ export class EvaluationRepository {
         consistencyGrade: input.grade,
         consistencyDetails: input.details,
         consistencyCalculatedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(evaluations.issueId, input.issueId))
+      .returning();
+
+    return updated;
+  }
+
+  /**
+   * リードタイム評価を保存する
+   */
+  async saveLeadTimeEvaluation(input: SaveLeadTimeEvaluationInput): Promise<Evaluation> {
+    await this.ensureEvaluationRecord(input.issueId);
+
+    const [updated] = await db
+      .update(evaluations)
+      .set({
+        leadTimeScore: input.score,
+        leadTimeGrade: input.grade,
+        leadTimeCalculatedAt: new Date(),
         updatedAt: new Date(),
       })
       .where(eq(evaluations.issueId, input.issueId))
