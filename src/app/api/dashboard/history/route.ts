@@ -5,6 +5,7 @@ import { EvaluationRepository } from "@/infrastructure/repositories/evaluation-r
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
 import { TrackedCollaboratorRepository } from "@/infrastructure/repositories/tracked-collaborator-repository";
 import { SprintCalculator, type SprintConfig } from "@/domain/sprint";
+import { SprintNumber } from "@/domain/sprint/value-objects/SprintNumber";
 
 export const dynamic = "force-dynamic";
 
@@ -142,18 +143,14 @@ export async function GET(request: NextRequest) {
     // 追跡対象ユーザーを取得
     const trackedUserNames = await trackedCollaboratorRepo.findTrackedUserNamesByRepositoryId(repoId);
 
-    // 対象スプリント番号の範囲
-    const minSprintNumber = currentSprintNumber - sprintCount + 1;
-
     // 全Issueを取得
     const allIssues = await issueRepo.findByRepositoryId(repoId);
 
-    // 各IssueにスプリントIDが設定されていて、対象範囲内のものをフィルタ
+    // スプリント番号が設定されていて、1以上のIssueをフィルタ
     const targetIssues = allIssues.filter(
       (issue) =>
         issue.sprintNumber !== null &&
-        issue.sprintNumber >= minSprintNumber &&
-        issue.sprintNumber <= currentSprintNumber
+        issue.sprintNumber >= 1
     );
 
     // 各Issueの評価データと作成者情報を取得
@@ -211,15 +208,39 @@ export async function GET(request: NextRequest) {
       issuesBySprintMap.get(issue.sprintNumber)!.push(issue);
     }
 
+    // フィルタ前の全Issue（sprint_number >= 1）からスプリント範囲を決定
+    const allSprintNumbers = targetIssues.map(issue => issue.sprintNumber!);
+    const MIN_SPRINT_COUNT = 8;
+
+    let minSprintInData: number;
+    let maxSprintInData: number;
+
+    if (allSprintNumbers.length > 0) {
+      minSprintInData = Math.max(1, Math.min(...allSprintNumbers));
+      maxSprintInData = Math.max(...allSprintNumbers, currentSprintNumber);
+    } else {
+      // データがない場合でも最低8スプリント分を表示
+      minSprintInData = Math.max(1, currentSprintNumber - MIN_SPRINT_COUNT + 1);
+      maxSprintInData = currentSprintNumber;
+    }
+
+    // 最低8スプリント分を確保
+    const sprintRange = maxSprintInData - minSprintInData + 1;
+    if (sprintRange < MIN_SPRINT_COUNT) {
+      // 現在のスプリントから8個分を確保（ただし最小は1）
+      minSprintInData = Math.max(1, maxSprintInData - MIN_SPRINT_COUNT + 1);
+    }
+
     // スプリントごとの統計を計算
     const sprintStats: SprintStats[] = [];
 
-    for (let i = 0; i < sprintCount; i++) {
-      const offset = -i;
-      const targetSprint = sprintCalculator.getSprintWithOffset(now, offset);
-      const sprintStart = targetSprint.period.startDate;
-      const sprintEnd = targetSprint.period.endDate;
-      const sprintNumber = targetSprint.number.value;
+    // DBに存在するスプリント範囲でループ
+    for (let sprintNum = minSprintInData; sprintNum <= maxSprintInData; sprintNum++) {
+      const sprintNumber = sprintNum;
+      const sprintNumberVO = SprintNumber.createAllowingZeroOrNegative(sprintNum);
+      const period = sprintCalculator.calculateSprintPeriod(sprintNumberVO);
+      const sprintStart = period.startDate;
+      const sprintEnd = period.endDate;
 
       const sprintIssues = issuesBySprintMap.get(sprintNumber) || [];
 
