@@ -905,11 +905,9 @@ export default function DashboardPage() {
           <Button variant="outline" size="sm" onClick={goToPrevSprint}>
             ← 前のスプリント
           </Button>
-          {!data.sprint.isCurrent && (
-            <Button variant="outline" size="sm" onClick={goToCurrentSprint}>
-              今週に戻る
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={goToCurrentSprint} disabled={data.sprint.isCurrent}>
+            今週に戻る
+          </Button>
           <Button
             variant="outline"
             size="sm"
