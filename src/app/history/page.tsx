@@ -306,30 +306,21 @@ export default function HistoryPage() {
         <div>
           <h1 className="text-2xl font-bold">評価履歴</h1>
           <p className="text-muted-foreground mt-1">
-            {data.repository} | 過去{data.sprintCount}スプリントの推移
+            過去{data.sprintCount}スプリントの推移
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-sm text-muted-foreground">表示期間:</span>
-          <Select value={sprintCount} onValueChange={setSprintCount}>
-            <SelectTrigger className="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="4">4週間</SelectItem>
-              <SelectItem value="8">8週間</SelectItem>
-              <SelectItem value="12">12週間</SelectItem>
-              <SelectItem value="24">24週間</SelectItem>
-              <SelectItem value="48">48週間</SelectItem>
-              <SelectItem value="72">72週間</SelectItem>
-              <SelectItem value="96">96週間</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
       </div>
 
       {/* サマリーカード */}
       <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <div className="text-3xl font-bold">{data.trackedUsers.length}</div>
+              <div className="text-sm text-muted-foreground">トラック中ユーザー</div>
+            </div>
+          </CardContent>
+        </Card>
         <Card>
           <CardContent className="pt-6">
             <div className="text-center">
@@ -351,6 +342,7 @@ export default function HistoryPage() {
             <div className="text-center">
               <div className="text-3xl font-bold">
                 {overallAverageScore !== null ? overallAverageScore : "-"}
+                <span className="text-sm text-muted-foreground">/100</span>
               </div>
               <div className="text-sm text-muted-foreground">平均速度スコア</div>
             </div>
@@ -361,6 +353,7 @@ export default function HistoryPage() {
             <div className="text-center">
               <div className="text-3xl font-bold">
                 {overallAverageQualityScore !== null ? overallAverageQualityScore : "-"}
+                <span className="text-sm text-muted-foreground">/100</span>
               </div>
               <div className="text-sm text-muted-foreground">平均品質スコア</div>
             </div>
@@ -371,16 +364,9 @@ export default function HistoryPage() {
             <div className="text-center">
               <div className="text-3xl font-bold">
                 {overallAverageConsistencyScore !== null ? overallAverageConsistencyScore : "-"}
+                <span className="text-sm text-muted-foreground">/100</span>
               </div>
               <div className="text-sm text-muted-foreground">平均整合性スコア</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="pt-6">
-            <div className="text-center">
-              <div className="text-3xl font-bold">{data.trackedUsers.length}</div>
-              <div className="text-sm text-muted-foreground">トラック中ユーザー</div>
             </div>
           </CardContent>
         </Card>
