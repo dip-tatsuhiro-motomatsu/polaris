@@ -113,7 +113,7 @@ export default function HistoryPage() {
   const [data, setData] = useState<HistoryData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [sprintCount, setSprintCount] = useState("12");
+  const sprintCount = "12";
 
   const fetchData = useCallback(async () => {
     if (!selectedRepository) {
