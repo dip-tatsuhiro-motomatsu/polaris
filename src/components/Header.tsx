@@ -18,13 +18,13 @@ export function Header() {
             href="/dashboard"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            今スプリント
+            スプリント毎の評価
           </Link>
           <Link
             href="/history"
             className="text-sm text-muted-foreground hover:text-foreground"
           >
-            履歴
+            評価の推移
           </Link>
           <Link
             href="/settings"
