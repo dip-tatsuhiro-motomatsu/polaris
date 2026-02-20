@@ -3,8 +3,7 @@
  * Issue記述品質をAIで評価し、ドメインロジックでスコア・グレードを計算
  */
 
-import { generateObject } from "ai";
-import { getModel, getAIConfig } from "@/lib/ai/provider";
+import { type IAIService, getAIService } from "@/infrastructure/external/ai";
 import { QualityScore } from "../value-objects/QualityScore";
 import { QualityGrade } from "../value-objects/QualityGrade";
 import { QUALITY_CATEGORIES } from "../value-objects/EvaluationCriteria";
@@ -44,19 +43,22 @@ export interface QualityEvaluationResult {
 }
 
 export class QualityEvaluator {
+  private aiService: IAIService;
+
+  constructor(aiService?: IAIService) {
+    this.aiService = aiService ?? getAIService();
+  }
+
   /**
    * Issueの品質を評価
    */
   async evaluate(issue: IssueForEvaluation): Promise<QualityEvaluationResult> {
-    const config = getAIConfig();
     const prompt = this.buildPrompt(issue);
 
-    // AIからカテゴリ別スコアを取得
-    const { object: aiResponse } = await generateObject({
-      model: getModel(),
+    // AIからカテゴリ別スコアを取得（抽象レイヤー経由）
+    const aiResponse = await this.aiService.generateStructuredOutput({
       schema: QualityEvaluationResponseSchema,
       prompt,
-      temperature: config.temperature,
     });
 
     // ドメインロジックでスコア計算・グレード判定

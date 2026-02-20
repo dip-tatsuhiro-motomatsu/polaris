@@ -10,7 +10,7 @@
 import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
 import { IssueRepository } from "@/infrastructure/repositories/issue-repository";
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
-import { getIssues } from "@/lib/github/client";
+import { type IGitHubClient, getGitHubClient } from "@/infrastructure/external/github";
 import { SprintCalculator, SprintConfig } from "@/domain/sprint";
 import type { Issue, NewIssue, Collaborator } from "@/infrastructure/database/schema";
 
@@ -32,15 +32,18 @@ export class SyncIssuesUseCase {
   private repositoryRepository: RepositoryRepository;
   private issueRepository: IssueRepository;
   private collaboratorRepository: CollaboratorRepository;
+  private gitHubClient: IGitHubClient;
 
   constructor(
     repositoryRepository?: RepositoryRepository,
     issueRepository?: IssueRepository,
-    collaboratorRepository?: CollaboratorRepository
+    collaboratorRepository?: CollaboratorRepository,
+    gitHubClient?: IGitHubClient
   ) {
     this.repositoryRepository = repositoryRepository ?? new RepositoryRepository();
     this.issueRepository = issueRepository ?? new IssueRepository();
     this.collaboratorRepository = collaboratorRepository ?? new CollaboratorRepository();
+    this.gitHubClient = gitHubClient ?? getGitHubClient();
   }
 
   async execute(input: SyncIssuesInput): Promise<SyncIssuesOutput> {
@@ -63,10 +66,10 @@ export class SyncIssuesUseCase {
     // 現在のスプリント番号を計算
     const currentSprintNumber = sprintCalculator.calculateSprintNumber(new Date()).value;
 
-    // GitHubからIssue取得
+    // GitHubからIssue取得（抽象レイヤー経由）
     let githubIssues;
     try {
-      githubIssues = await getIssues(
+      githubIssues = await this.gitHubClient.getIssues(
         repository.ownerName,
         repository.repoName,
         input.since
@@ -76,7 +79,7 @@ export class SyncIssuesUseCase {
     }
 
     // PRを除外（GitHubのIssue APIはPRも含むため）
-    const issuesOnly = githubIssues.filter((issue) => !issue.pull_request);
+    const issuesOnly = githubIssues.filter((issue) => !issue.isPullRequest);
 
     if (issuesOnly.length === 0) {
       return { success: true, syncedCount: 0, currentSprintNumber, issues: [] };
@@ -104,7 +107,7 @@ export class SyncIssuesUseCase {
         : undefined;
 
       // Issue作成日からスプリント番号を計算
-      const issueCreatedAt = new Date(githubIssue.created_at);
+      const issueCreatedAt = new Date(githubIssue.createdAt);
       const issueSprintNumber = sprintCalculator.calculateIssueSprintNumber(issueCreatedAt);
 
       return {
@@ -117,8 +120,8 @@ export class SyncIssuesUseCase {
         assigneeCollaboratorId: assigneeCollaborator?.id ?? null,
         sprintNumber: issueSprintNumber.value,
         githubCreatedAt: issueCreatedAt,
-        githubClosedAt: githubIssue.closed_at
-          ? new Date(githubIssue.closed_at)
+        githubClosedAt: githubIssue.closedAt
+          ? new Date(githubIssue.closedAt)
           : null,
       };
     });

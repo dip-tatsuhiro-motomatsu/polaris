@@ -3,8 +3,7 @@
  * Issue-PR整合性をAIで評価し、ドメインロジックでスコア・グレードを計算
  */
 
-import { generateObject } from "ai";
-import { getModel, getAIConfig } from "@/lib/ai/provider";
+import { type IAIService, getAIService } from "@/infrastructure/external/ai";
 import { QualityScore } from "../value-objects/QualityScore";
 import { ConsistencyGrade } from "../value-objects/ConsistencyGrade";
 import { CONSISTENCY_CATEGORIES } from "../value-objects/EvaluationCriteria";
@@ -45,6 +44,12 @@ export interface ConsistencyEvaluationResult {
 }
 
 export class ConsistencyEvaluator {
+  private aiService: IAIService;
+
+  constructor(aiService?: IAIService) {
+    this.aiService = aiService ?? getAIService();
+  }
+
   /**
    * Issue-PRの整合性を評価
    */
@@ -52,15 +57,12 @@ export class ConsistencyEvaluator {
     issue: IssueForConsistencyEvaluation,
     linkedPRs: LinkedPR[]
   ): Promise<ConsistencyEvaluationResult> {
-    const config = getAIConfig();
     const prompt = this.buildPrompt(issue, linkedPRs);
 
-    // AIからカテゴリ別スコアを取得
-    const { object: aiResponse } = await generateObject({
-      model: getModel(),
+    // AIからカテゴリ別スコアを取得（抽象レイヤー経由）
+    const aiResponse = await this.aiService.generateStructuredOutput({
       schema: ConsistencyEvaluationResponseSchema,
       prompt,
-      temperature: config.temperature,
     });
 
     // ドメインロジックでスコア計算・グレード判定

@@ -9,7 +9,7 @@
 import { RepositoryRepository } from "@/infrastructure/repositories/repository-repository";
 import { PullRequestRepository } from "@/infrastructure/repositories/pull-request-repository";
 import { CollaboratorRepository } from "@/infrastructure/repositories/collaborator-repository";
-import { getPullRequests } from "@/lib/github/client";
+import { type IGitHubClient, getGitHubClient } from "@/infrastructure/external/github";
 import type { PullRequest, NewPullRequest, Collaborator } from "@/infrastructure/database/schema";
 
 export interface SyncPullRequestsInput {
@@ -29,15 +29,18 @@ export class SyncPullRequestsUseCase {
   private repositoryRepository: RepositoryRepository;
   private pullRequestRepository: PullRequestRepository;
   private collaboratorRepository: CollaboratorRepository;
+  private gitHubClient: IGitHubClient;
 
   constructor(
     repositoryRepository?: RepositoryRepository,
     pullRequestRepository?: PullRequestRepository,
-    collaboratorRepository?: CollaboratorRepository
+    collaboratorRepository?: CollaboratorRepository,
+    gitHubClient?: IGitHubClient
   ) {
     this.repositoryRepository = repositoryRepository ?? new RepositoryRepository();
     this.pullRequestRepository = pullRequestRepository ?? new PullRequestRepository();
     this.collaboratorRepository = collaboratorRepository ?? new CollaboratorRepository();
+    this.gitHubClient = gitHubClient ?? getGitHubClient();
   }
 
   async execute(input: SyncPullRequestsInput): Promise<SyncPullRequestsOutput> {
@@ -47,10 +50,10 @@ export class SyncPullRequestsUseCase {
       return { success: false, error: "リポジトリが見つかりません" };
     }
 
-    // GitHubからPR取得
+    // GitHubからPR取得（抽象レイヤー経由）
     let githubPRs;
     try {
-      githubPRs = await getPullRequests(
+      githubPRs = await this.gitHubClient.getPullRequests(
         repository.ownerName,
         repository.repoName,
         input.since
@@ -85,9 +88,9 @@ export class SyncPullRequestsUseCase {
         title: githubPR.title,
         state: githubPR.state,
         authorCollaboratorId: authorCollaborator?.id ?? null,
-        githubCreatedAt: new Date(githubPR.created_at),
-        githubMergedAt: githubPR.merged_at
-          ? new Date(githubPR.merged_at)
+        githubCreatedAt: new Date(githubPR.createdAt),
+        githubMergedAt: githubPR.mergedAt
+          ? new Date(githubPR.mergedAt)
           : null,
       };
     });
